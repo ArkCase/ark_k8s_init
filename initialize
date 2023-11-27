@@ -34,7 +34,7 @@ get_pod_ready_status() {
 	local PODS=""
 	local COUNT="0"
 	while true ; do
-		PODS="$(kubectl get pods -A -o json 2>/dev/null)" || true
+		PODS="$(kubectl get pods -A --field-selector=status.phase!=Succeeded -o json 2>/dev/null)" || true
 		[ -n "${PODS}" ] || PODS="{ }"
 
 		# Count the number of pods ... if it's 0, we need to wait and
