@@ -3,36 +3,70 @@ SCRIPT="$(readlink -f "${0}")"
 BASEDIR="$(dirname "${SCRIPT}")"
 SCRIPT="$(basename "${SCRIPT}")"
 
-set -e -o pipefail
+set -euo pipefail
 
-CRI_SOCKETS=(/var/run/cri-dockerd.sock /var/run/crio/crio.sock /var/run/containerd/containerd.sock)
-for SOCKET in "${CRI_SOCKETS[@]}" ; do
-	if [ -S "${SOCKET}" ] ; then
-		CRI=(--cri-socket "unix://${SOCKET}")
-		break
-	fi
-done
+timestamp()
+{
+	date -Ins -u
+}
 
-echo_run() {
+say()
+{
+	echo -e "$(timestamp): ${@}"
+}
+
+fail()
+{
+	say "❌ ${@}" 1>&2
+	exit ${EXIT_CODE:-1}
+}
+
+echo_run()
+{
 	local ARGS=("${@}")
-	echo "${ARGS[@]@Q}"
+	say "${ARGS[@]@Q}"
 	"${@}"
 }
 
-# Clean house
-echo_run kubeadm reset -f "${CRI[@]}"
-[ -d /etc/cni/net.d ] && rm -rf /etc/cni/net.d
-[ -d ~/.kube ] && rm -rf ~/.kube
-rm -f /usr/local/share/ca-certificates/k8s-ca.crt
+# Is k3d installed?
+K3D="$(type -P k3d)" || true
 
-CA_UPDATER=(update-ca-trust update-ca-certificates)
-for ca in "${CA_UPDATER[@]}" ; do
-	if type -P "${ca}" &>/dev/null ; then
-		RC=0
-		echo_run "${ca}" || RC=${?}
-		[ ${RC} -eq 0 ] || echo "WARNING: ${ca} returned ${RC} ... certificate trusts may be incomplete!"
-		break
-	fi
-done
+K8S_ENGINE="k8s"
+K3D_CLUSTERS=()
+if [ -n "${K3D}" ] ; then
+	readarray -t K3D_CLUSTERS < <("${K3D}" cluster list --no-headers --output json | jq -r '.[] | .name')
+	[ ${#K3D_CLUSTERS[@]} -gt 0 ] && K8S_ENGINE="k3d"
+fi
 
-echo_run systemctl stop kubelet
+case "${K8S_ENGINE}" in
+	k8s )	CRI_SOCKETS=(/var/run/cri-dockerd.sock /var/run/crio/crio.sock /var/run/containerd/containerd.sock)
+		for SOCKET in "${CRI_SOCKETS[@]}" ; do
+			if [ -S "${SOCKET}" ] ; then
+				CRI=(--cri-socket "unix://${SOCKET}")
+				break
+			fi
+		done
+
+		# Clean house
+		echo_run kubeadm reset -f "${CRI[@]}"
+		[ -d /etc/cni/net.d ] && rm -rf /etc/cni/net.d
+		rm -f /usr/local/share/ca-certificates/k8s-ca.crt
+
+		CA_UPDATER=(update-ca-trust update-ca-certificates)
+		for ca in "${CA_UPDATER[@]}" ; do
+			if type -P "${ca}" &>/dev/null ; then
+				RC=0
+				echo_run "${ca}" || RC=${?}
+				[ ${RC} -eq 0 ] || echo "WARNING: ${ca} returned ${RC} ... certificate trusts may be incomplete!"
+				break
+			fi
+		done
+
+		echo_run systemctl stop kubelet
+		;;
+
+	k3d )	"${K3D}" cluster delete "${K3D_CLUSTERS[@]}"
+		;;
+esac
+
+[ -d ~/.kube ] && rm -rf ~/.kube || true

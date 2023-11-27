@@ -5,6 +5,30 @@ SCRIPT="$(basename "${SCRIPT}")"
 
 set -euo pipefail
 
+timestamp()
+{
+	date -Ins -u
+}
+
+say()
+{
+	echo -e "$(timestamp): ${@}"
+}
+
+fail()
+{
+	say "❌ ${@}" 1>&2
+	exit ${EXIT_CODE:-1}
+}
+
+echo_run() {
+	local ARGS=("${@}")
+	say "${ARGS[@]@Q}"
+	"${@}"
+}
+
+[ -v K8S_ENGINE ] || fail "No K8S_ENGINE value is set"
+
 CRI_SOCKETS=(/var/run/cri-dockerd.sock /var/run/crio/crio.sock /var/run/containerd/containerd.sock)
 CRI=()
 for SOCKET in "${CRI_SOCKETS[@]}" ; do
@@ -23,50 +47,47 @@ FLAGS=(
 	--service-cidr "${SERVICE_CIDR}"
 )
 
-[ -v CONTROL_PLANE_ENDPOINT ] || CONTROL_PLANE_ENDPOINT=""
+case "${K8S_ENGINE}" in
+	k3d )	k3d cluster create || fail "Failed to initialize the k3d cluster (rc=${?})"
+		echo_run mkdir -p "${HOME}/.kube" || true
+		k3d kubeconfig get -a > "${HOME}/.kube/config"
+		echo_run chown -v $(id -u):$(id -g) "${HOME}/.kube/config"
+		exit 0
+		;;
 
-# From what we've seen, this is harmless if used all the time. However,
-# the exposure of this variable means that we can easily enough initialize
-# control plane nodes designed to use a shared endpoint IP (remember to
-# set up the HAP facade first!).
-[ -n "${CONTROL_PLANE_ENDPOINT}" ] || CONTROL_PLANE_ENDPOINT="127.0.0.1"
+	k8s )	echo_run systemctl start kubelet
 
-FLAGS+=(--control-plane-endpoint "${CONTROL_PLANE_ENDPOINT}")
+		# Next, init the cluster
+		echo_run kubeadm init --upload-certs "${CRI[@]}" "${FLAGS[@]}"
 
-echo_run() {
-	local ARGS=("${@}")
-	echo "${ARGS[@]@Q}"
-	"${@}"
-}
+		CA_UPDATER=()
+		CA_UPDATER+=(update-ca-trust:/etc/pki/ca-trust/source/anchors)
+		CA_UPDATER+=(update-ca-certificates:/usr/local/share/ca-certificates/)
+		for updater in "${CA_UPDATER[@]}" ; do
+			IFS=":" read ca target <<< "${updater}"
+			if type -P "${ca}" &>/dev/null ; then
+				echo_run cp -vf /etc/kubernetes/pki/ca.crt "${target}"/k8s-ca.crt
+				RC=0
+				echo_run "${ca}" || RC=${?}
+				[ ${RC} -eq 0 ] || say "⚠️ WARNING: ${ca} returned ${RC} ... certificate trusts may be incomplete!"
+				break
+			fi
+		done
 
-echo_run systemctl start kubelet
+		echo_run mkdir -p "${HOME}/.kube" || true
+		echo_run cp -vi /etc/kubernetes/admin.conf "${HOME}/.kube/config"
+		echo_run chown -v $(id -u):$(id -g) "${HOME}/.kube/config"
 
-# Next, init the cluster
-echo_run kubeadm init --upload-certs "${CRI[@]}" "${FLAGS[@]}"
+		# This will need to be run after each added node
+		echo_run kubectl taint nodes --all node-role.kubernetes.io/master- || true
+		# ONLY FOR SINGLE-NODE CLUSTERS
+		echo_run kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+		;;
 
-CA_UPDATER=()
-CA_UPDATER+=(update-ca-trust:/etc/pki/ca-trust/source/anchors)
-CA_UPDATER+=(update-ca-certificates:/usr/local/share/ca-certificates/)
-for updater in "${CA_UPDATER[@]}" ; do
-	IFS=":" read ca target <<< "${updater}"
-	if type -P "${ca}" &>/dev/null ; then
-		echo_run cp -vf /etc/kubernetes/pki/ca.crt "${target}"/k8s-ca.crt
-		RC=0
-		echo_run "${ca}" || RC=${?}
-		[ ${RC} -eq 0 ] || echo "WARNING: ${ca} returned ${RC} ... certificate trusts may be incomplete!"
-		break
-	fi
-done
-
-echo_run mkdir -p "${HOME}/.kube" || true
-echo_run cp -vi /etc/kubernetes/admin.conf "${HOME}/.kube/config"
-echo_run chown -v $(id -u):$(id -g) "${HOME}/.kube/config"
-
-# This will need to be run after each added node
-echo_run kubectl taint nodes --all node-role.kubernetes.io/master- || true
-# ONLY FOR SINGLE-NODE CLUSTERS
-echo_run kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+	* )	fail "Unsupported K8s engine [${K8S_ENGINE}]" ;;
+esac
 
 # Some short display stuff
-echo_run kubectl get nodes
-echo_run kubectl get pods --all-namespaces
+echo_run kubectl get nodes || fail "Unable to enumerate the cluster's nodes... can't continue!"
+echo_run kubectl get pods --all-namespaces || fail "Unable to enumerate the cluster's pods... can't continue!"
+exit 0

@@ -5,20 +5,30 @@ SOURCE="${BASH_SOURCE:-${0}}"
 
 set -euo pipefail
 
+timestamp()
+{
+	date -Ins -u
+}
+
+say()
+{
+	echo -e "$(timestamp): ${@}"
+}
+
+fail()
+{
+	say "❌ ${@}" 1>&2
+	exit ${EXIT_CODE:-1}
+}
+
 DEF_BOOT_TIMEOUT=90
 MIN_BOOT_TIMEOUT=15
 
 SCRIPTS="${BASEDIR}/.scripts"
 [ -v K8S_CONF ] || K8S_CONF="${BASEDIR}/conf"
 
-say() {
-	echo -e "${@}"
-}
-
-fail() {
-	say "${@}" 1>&2
-	exit ${EXIT_CODE:-1}
-}
+[ -v K8S_ENGINE ] || fail "No K8s engine value is set"
+[ -v K8S_ENGINE ] || fail "No K8S_ENGINE value is set"
 
 get_pod_ready_status() {
 	local PODS=""
@@ -74,9 +84,7 @@ OUT="$("${BASEDIR}/clear-node" 2>&1)" || RC=${?}
 # Initialize Kubernetes
 #
 say "Initializing the K8s node"
-OUT="$("${SCRIPTS}/init-node" 2>&1)" || RC=${?}
-[ ${RC} -eq 0 ] || fail "Failed during node initialization:\n${OUT}"
-
+"${SCRIPTS}/init-node" || fail "Failed during node initialization (rc=${?})"
 
 [ -v BOOT_TIMEOUT ] || BOOT_TIMEOUT=${DEF_BOOT_TIMEOUT}
 [[ "${BOOT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] || BOOT_TIMEOUT=${DEF_BOOT_TIMEOUT}
@@ -103,12 +111,30 @@ while true ; do
 done
 say ""
 
-#
-# Add Calico
-#
-say "Installing Calico"
-OUT="$("${SCRIPTS}/init-calico" 2>&1)" || RC=${?}
-[ ${RC} -eq 0 ] || fail "Failed to install Calico: \n${OUT}"
+# Identify the type of cluster - K3d or K8s
+
+
+case "${K8S_ENGINE}" in
+	k8s )	#
+		# Add Calico
+		#
+		say "Installing Calico"
+		OUT="$("${SCRIPTS}/init-calico" 2>&1)" || RC=${?}
+		[ ${RC} -eq 0 ] || fail "Failed to install Calico: \n${OUT}"
+
+		#
+		# Add K8s metrics
+		#
+		say "Deploying the K8s metrics"
+		OUT="$("${SCRIPTS}/init-metrics" 2>&1)" || RC=${?}
+		[ ${RC} -eq 0 ] || fail "Failed to install the K8s metrics: \n${OUT}"
+		;;
+	k3d )	#
+		;;
+
+	* )	fail "Unknown k8s engine [${K8S_ENGINE}]"
+		;;
+esac
 
 #
 # Add HAProxy
@@ -123,13 +149,6 @@ OUT="$("${SCRIPTS}/init-hap" "${K8S_CONF}/haproxy-ingress-values.yaml" 2>&1)" ||
 say "Deploying the K8s dashboard"
 OUT="$(kubectl apply -f "${K8S_CONF}/k8s-dashboard.yaml" 2>&1)" || RC=${?}
 [ ${RC} -eq 0 ] || fail "Failed to install the K8s dashboard: \n${OUT}"
-
-#
-# Add K8s metrics
-#
-say "Deploying the K8s metrics"
-OUT="$("${SCRIPTS}/init-metrics" 2>&1)" || RC=${?}
-[ ${RC} -eq 0 ] || fail "Failed to install the K8s metrics: \n${OUT}"
 
 #
 # Create the AWS pull secret on the main namespace, as a template
