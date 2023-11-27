@@ -281,7 +281,7 @@ else
 		[ -v CLUSTER_CIDR ] && say "\t👉 CLUSTER_CIDR=[${CLUSTER_CIDR}]"
 		[ -v SERVICE_CIDR ] && say "\t👉 SERVICE_CIDR=[${SERVICE_CIDR}]"
 		exec ./initialize
-	) || fail "❌ failed to initialize the ${K8S_ENGINE} cluster (rc=${?})"
+	) || fail "Failed to initialize the ${K8S_ENGINE} cluster (rc=${?})"
 fi
 
 #
