@@ -21,7 +21,7 @@ fail()
 	exit ${EXIT_CODE:-1}
 }
 
-DEF_BOOT_TIMEOUT=90
+DEF_BOOT_TIMEOUT=300
 MIN_BOOT_TIMEOUT=15
 
 SCRIPTS="${BASEDIR}/.scripts"
@@ -96,9 +96,9 @@ say "Initializing the K8s node"
 say "Will wait up to ${BOOT_TIMEOUT} seconds for the initial boot sequence to complete"
 START="$(date +%s)"
 while true ; do
-	UNREADY="$(get_unready_pods | grep -v '^kube-system coredns-' | wc -l)" || true
-	[ -n ${UNREADY} ] || fail "Failed while waiting for the initial boot sequence to complete, please install Calico et al 'manually'"
-	[[ "${UNREADY}" =~ ^[0-9]+$ ]] || fail "Failed to count the unready pods, please install Calico et al 'manually'"
+	UNREADY="$(grep -v '^kube-system coredns-' < <(get_unready_pods) | wc -l)" || true
+	[ -n "${UNREADY}" ] || fail "Failed while waiting for the initial boot sequence to complete, please install Calico et al 'manually'"
+	[[ "${UNREADY}" =~ ^[0-9]+$ ]] || fail "Failed to count the unready pods properly, please install Calico et al 'manually'"
 
 	# If there are no unready pods, we just break...
 	[ ${UNREADY} -eq 0 ] && break
@@ -109,7 +109,7 @@ while true ; do
 	sleep 1 || fail "Waiting cycle canceled, please install Calico et al 'manually'"
 	echo -n "."
 done
-say ""
+echo ""
 
 # Identify the type of cluster - K3d or K8s
 
@@ -176,9 +176,9 @@ kubectl get pods -A
 
 START="$(date +%s)"
 while true ; do
-	UNREADY="$(get_unready_pods | wc -l)" || true
+	UNREADY="$(wc -l < <(get_unready_pods))" || true
 	[ -n ${UNREADY} ] || { say "Failed while waiting for the pods to become ready." ; break ; }
-	[[ "${UNREADY}" =~ ^[0-9]+$ ]] || { say "Failed to count the unready pods." ; break ; }
+	[[ "${UNREADY}" =~ ^[0-9]+$ ]] || { say "Failed to count the unready pods properly." ; break ; }
 
 	# If there are no unready pods, we just break...
 	[ ${UNREADY} -eq 0 ] && break
@@ -190,6 +190,7 @@ while true ; do
 
 	echo -n "."
 done
+echo ""
 
 #
 # Configure local DNS integration
