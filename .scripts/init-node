@@ -42,26 +42,32 @@ done
 [ -v SERVICE_CIDR ] || SERVICE_CIDR="${CLUSTER_CIDR}"
 
 # This will get populated as we go
-FLAGS=(
-	--pod-network-cidr "${CLUSTER_CIDR}"
-	--service-cidr "${SERVICE_CIDR}"
-)
 
 case "${K8S_ENGINE}" in
-	k3d )	k3d cluster create \
+	k3d )	#
+		K3D_FLAGS=(
+		#	--k3s-arg "--cluster-cidr=${CLUSTER_CIDR}@all:*"
+		#	--k3s-arg "--service-cidr=${SERVICE_CIDR}@all:*"
+		)
+		echo_run k3d cluster create \
+			"${K3D_FLAGS[@]}" \
 			--k3s-arg "--disable=local-storage@all:*" \
 			--k3s-arg "--disable=traefik@all:*" \
 			--k3s-arg "--disable=servicelb@all:*" || fail "Failed to initialize the k3d cluster (rc=${?})"
+
 		echo_run mkdir -p "${HOME}/.kube" || true
 		k3d kubeconfig get -a > "${HOME}/.kube/config"
 		echo_run chown -v $(id -u):$(id -g) "${HOME}/.kube/config"
-		exit 0
 		;;
 
 	k8s )	echo_run systemctl start kubelet
 
 		# Next, init the cluster
-		echo_run kubeadm init --upload-certs "${CRI[@]}" "${FLAGS[@]}"
+		K8S_FLAGS=(
+			--pod-network-cidr "${CLUSTER_CIDR}"
+			--service-cidr "${SERVICE_CIDR}"
+		)
+		echo_run kubeadm init --upload-certs "${CRI[@]}" "${K8S_FLAGS[@]}" || fail "Failed to initialize the K8s cluster (rc=${?})"
 
 		CA_UPDATER=()
 		CA_UPDATER+=(update-ca-trust:/etc/pki/ca-trust/source/anchors)
