@@ -39,8 +39,15 @@ systemctl status "${RESOLVED}" &>/dev/null && RESOLVED_RUNNING="true"
 # Get the IP for the DNS service...
 DNS_IP="$(kubectl get service -n kube-system kube-dns -o json | jq -r ".spec.clusterIP")" || fail "Failed to get the IP address for the kube-dns service"
 
-# Get the cluster domain (separated by spaces)
-CLUSTER_DOMAIN="$(kubectl get pod -n kube-system "$(kubectl get pod -n kube-system | grep "^kube-apiserver-" | awk '{ print $1 }')" -o json | jq -r '.spec.containers[].command[] | select(startswith("--service-account-issuer")) | sub("^.*=https://kubernetes[.]default[.]"; "default.")')"
+readarray -t KUBE_APISERVER < <(kubectl get pod -n kube-system | grep "^kube-apiserver-" | awk '{ print $1 }' | head -1)
+
+if [ "${#KUBE_APISERVER[@]}" -gt 0 ] ; then
+	# Get the cluster domain (separated by spaces)
+	CLUSTER_DOMAIN="$(kubectl get pod -o json -n kube-system "${KUBE_APISERVER[@]}" | jq -r '.spec.containers[].command[] | select(startswith("--service-account-issuer")) | sub("^.*=https://kubernetes[.]default[.]"; "default.")')"
+else
+	# This is K3d... how do we get this at runtime from K3d-land?!?!?
+	CLUSTER_DOMAIN="default.svc.cluster.local"
+fi
 
 # Make sure the target directory exists
 TARGET_DIR="${SYSTEMD_DIR}/resolved.conf.d"

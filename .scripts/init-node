@@ -48,7 +48,10 @@ FLAGS=(
 )
 
 case "${K8S_ENGINE}" in
-	k3d )	k3d cluster create || fail "Failed to initialize the k3d cluster (rc=${?})"
+	k3d )	k3d cluster create \
+			--k3s-arg "--disable=local-storage@all:*" \
+			--k3s-arg "--disable=traefik@all:*" \
+			--k3s-arg "--disable=servicelb@all:*" || fail "Failed to initialize the k3d cluster (rc=${?})"
 		echo_run mkdir -p "${HOME}/.kube" || true
 		k3d kubeconfig get -a > "${HOME}/.kube/config"
 		echo_run chown -v $(id -u):$(id -g) "${HOME}/.kube/config"

@@ -47,7 +47,6 @@ if [ "$(/usr/bin/id -u)" != "0" ] ; then
 	say "👉 Not running as root, must escalate privileges!"
 	sudo -EH "${0}" "${@}" || fail "\tRoot installation tasks failed (rc=${?})!"
 	say "\t✅ Root portions completed!"
-	exit 0
 
 	#
 	# Take stock of the new kernel versions installed
