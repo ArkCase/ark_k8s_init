@@ -274,7 +274,7 @@ if ! kubectl get pods -A &>/dev/null ; then
 		( cd tools && tar -czf - . ) | tar -C /usr/local/bin -xzvf -
 		[ -v CLUSTER_CIDR ] && echo "	👉 CLUSTER_CIDR=[${CLUSTER_CIDR}]"
 		[ -v SERVICE_CIDR ] && echo "	👉 SERVICE_CIDR=[${SERVICE_CIDR}]"
-		"${SCRIPT_DIR}/init-node"
+		"${SCRIPT_DIR}/init-cluster"
 	)
 fi
 ok "The Kubernetes node is initialized"
@@ -288,7 +288,7 @@ if ! aws --version &>/dev/null ; then
 		set -euo pipefail
 		cd
 		curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-		unzip awscliv2.zip
+		unzip -q awscliv2.zip # Removes list of 
 		./aws/install "${UPGRADE_FLAGS[@]}"
 		rm -rf aws awscliv2.zip
 		aws --version
