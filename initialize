@@ -99,14 +99,14 @@ if [ "$(/usr/bin/id -u)" != "0" ] ; then
 	if docker ps -a &>/dev/null ; then
 		ok "Docker control is enabled"
 	else
-		err "Your group memberships haven't been updated, you must log out and back in to enable control of Docker"
+		fail "Your group memberships haven't been updated, you must log out and back in to enable control of Docker"
 	fi
 	echo ""
 
 	if kubectl get pods -A &>/dev/null ; then
 		ok "Kubernetes control is enabled"
 	else
-		err "Your Kubernetes configuration seems to be incorrect, please fix it before continuing. Feel free to ask for help if you feel it's necessary."
+		fail "Your Kubernetes configuration seems to be incorrect, please fix it before continuing. Feel free to ask for help if you feel it's necessary."
 	fi
 	echo ""
 
@@ -274,7 +274,7 @@ if ! kubectl get pods -A &>/dev/null ; then
 		( cd tools && tar -czf - . ) | tar -C /usr/local/bin -xzvf -
 		[ -v CLUSTER_CIDR ] && echo "	👉 CLUSTER_CIDR=[${CLUSTER_CIDR}]"
 		[ -v SERVICE_CIDR ] && echo "	👉 SERVICE_CIDR=[${SERVICE_CIDR}]"
-		"${SCRIPT_DIR}/initialize"
+		"${SCRIPT_DIR}/init-node"
 	)
 fi
 ok "The Kubernetes node is initialized"
