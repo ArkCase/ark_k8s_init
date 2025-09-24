@@ -272,8 +272,8 @@ if KUBEADM_VER="$(kubeadm version -o json)" ; then
 		kubectl --context "local" --namespace "calico-system" delete pod --selector k8s-app=calico-node &>/dev/null || true
 		kubectl --context "local" --namespace "calico-system" delete pod --selector k8s-app=calico-typha &>/dev/null || true
 		doing "Waiting for Calico to reboot..."
-		kubectl --context "local" --namespace "calico-system" wait --timeout=30s --for condition=Ready pod --selector k8s-app=calico-typha &>/dev/null || err "Calico typha reboot timed out"
-		kubectl --context "local" --namespace "calico-system" wait --timeout=30s --for condition=Ready pod --selector k8s-app=calico-node &>/dev/null || err "Calico node reboot timed out"
+		kubectl --context "local" --namespace "calico-system" wait --timeout=90s --for condition=Ready pod --selector k8s-app=calico-typha &>/dev/null || err "Calico typha reboot timed out"
+		kubectl --context "local" --namespace "calico-system" wait --timeout=90s --for condition=Ready pod --selector k8s-app=calico-node &>/dev/null || err "Calico node reboot timed out"
 	fi
 
 	if kubectl --context "local" get nodes &>/dev/null ; then
