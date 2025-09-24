@@ -3,9 +3,6 @@ SCRIPT="$(readlink -f "${BASH_SOURCE:-${0}}")"
 
 set -euo pipefail
 
-export BASE_DIR="$(dirname "${SCRIPT}")"
-export SCRIPT_DIR="${BASE_DIR}/.scripts"
-
 timestamp()
 {
 	/usr/bin/date -Ins -u
@@ -101,4 +98,4 @@ while read DB ; do
 
 	doing "Installing the certificate into the DB [${DB}]..."
 	certutil -A -n "${CERT_NAME}" -t "TC,C,T" -i "${CERT_FILE}" -d "${DB_TYPE}:${DB_DIR}" && ok "\tCertificate installed!" || err "Installation failed (rc=${?})!"
-done < <(find ~/.mozilla ~/.thunderbird ~/.pki -type f -name 'cert*.db' 2>/dev/null | sort)
+done < <(find ~/.mozilla ~/.thunderbird ~/snap/firefox ~/snap/thunderbird ~/.pki -type f -name 'cert*.db' 2>/dev/null | sort)
