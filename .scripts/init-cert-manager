@@ -1,0 +1,216 @@
+#!/bin/bash
+SCRIPT="$(readlink -f "${BASH_ARGV0:-${0}}")"
+BASEDIR="$(dirname "${SCRIPT}")"
+SCRIPT="$(basename "${SCRIPT}")"
+
+set -e -o pipefail
+
+echo_run()
+{
+	local ARGS=("${@}")
+	echo "${ARGS[@]@Q}"
+	"${@}"
+}
+
+[ ${#} -ge 1 ] && HAP_VALUES="${1}"
+
+REPO_NAME="jetstack"
+REPO_URL="https://charts.jetstack.io"
+[ -v APP_NS ] || APP_NS="cert-manager"
+
+helm repo list | egrep -q "[[:space:]]${REPO_URL}/?[[:space:]]*$" || helm repo add "${REPO_NAME}" "${REPO_URL}"
+
+echo_run helm upgrade --install \
+	--kube-context "local" \
+	"cert-manager" \
+	jetstack/cert-manager \
+	--create-namespace --namespace "${APP_NS}" \
+	--set crds.enabled=true --wait
+
+echo_run helm upgrade --install \
+	--kube-context "local" \
+	"trust-manager" \
+	jetstack/trust-manager \
+	--namespace "${APP_NS}" --wait
+
+echo_run kubectl --namespace "${APP_NS}" apply -f - <<EOF
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: armedia-root
+  namespace: "${APP_NS}"
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: arkcase-net
+  namespace: "${APP_NS}"
+spec:
+  isCA: true
+  commonName: arkcase-net
+  subject:
+    organizations:
+      - Armedia, LLC
+  secretName: arkcase-net
+  secretTemplate:
+    labels:
+      armedia-certificate/role: "ca"
+      armedia-certificate/trust: "true"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: armedia-root
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: arkcase-com
+  namespace: "${APP_NS}"
+spec:
+  isCA: true
+  commonName: arkcase-com
+  subject:
+    organizations:
+      - Armedia, LLC
+  secretName: arkcase-com
+  secretTemplate:
+    labels:
+      armedia-certificate/role: "ca"
+      armedia-certificate/trust: "true"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: armedia-root
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: armedia-net
+  namespace: "${APP_NS}"
+spec:
+  isCA: true
+  commonName: armedia-net
+  subject:
+    organizations:
+      - Armedia, LLC
+  secretName: armedia-net
+  secretTemplate:
+    labels:
+      armedia-certificate/role: "ca"
+      armedia-certificate/trust: "true"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: armedia-root
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: armedia-com
+  namespace: "${APP_NS}"
+spec:
+  isCA: true
+  commonName: armedia-com
+  subject:
+    organizations:
+      - Armedia, LLC
+  secretName: armedia-com
+  secretTemplate:
+    labels:
+      armedia-certificate/role: "ca"
+      armedia-certificate/trust: "true"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: armedia-root
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: &name arkcase-net
+  namespace: "${APP_NS}"
+spec:
+  ca:
+    secretName: *name
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: &name arkcase-com
+  namespace: "${APP_NS}"
+spec:
+  ca:
+    secretName: *name
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: &name armedia-net
+  namespace: "${APP_NS}"
+spec:
+  ca:
+    secretName: *name
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: &name armedia-com
+  namespace: "${APP_NS}"
+spec:
+  ca:
+    secretName: *name
+---
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: "ca-trusts"
+spec:
+
+  sources:
+    - useDefaultCAs: true
+
+    # This solves our problem of manually having to
+    # add our certificates to the trust store
+    - secret:
+        key: "ca.crt"
+        selector:
+          matchLabels:
+            armedia-certificate/role: "ca"
+            armedia-certificate/trust: "true"
+
+  target:
+    configMap:
+      key: "ca-trusts.pem"
+    additionalFormats:
+      jks:
+        key: "cacerts"
+      pkcs12:
+        key: "cacerts.p12"
+
+    #
+    # Only add the "ca-trusts" configmap to the namespaces
+    # that have this label. This allows us to avoid wanton
+    # creation of potentially large configmap objects all
+    # over the place, even when they're not needed
+    #
+    # Note that the bit after the "/" in the annotation
+    # name is meant to indicate which of the trust bundles
+    # we want to import into the namespace, so we can add
+    # multiple different ones if we so choose (b/c they
+    # each will use a different configmap name)
+    #
+    namespaceSelector:
+      matchLabels:
+        armedia-certificate-trusts/ca-trusts: "true"
+EOF

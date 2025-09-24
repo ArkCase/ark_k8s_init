@@ -42,6 +42,13 @@ fail()
 RC=0
 
 #
+# Add Cert-Manager
+#
+doing "Installing Cert-Manager + Trust-Manager"
+OUT="$("${BASEDIR}/init-cert-manager" 2>&1)" || RC=${?}
+[ ${RC} -eq 0 ] || fail "Failed to install Cert-Manager and Trust-Manager: \n${OUT}"
+
+#
 # Add HAProxy
 #
 doing "Installing HAProxy Ingress"
