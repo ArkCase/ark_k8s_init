@@ -45,7 +45,7 @@ fail()
 
 cleanup()
 {
-	[ -v CERT_FILE ] && [ -n "${CERT_FILE}" ] && [ -d "${CERT_FILE}" ] && rm -rf "${CERT_FILE}" &>/dev/null
+	[ -v WORKDIR ] && [ -n "${WORKDIR}" ] && [ -d "${WORKDIR}" ] && rm -rf "${WORKDIR}" &>/dev/null
 }
 
 usage()
@@ -66,11 +66,13 @@ if [ ${#} -eq 1 ] ; then
 	RELEASE="${RELEASE,,}"
 fi
 
+WORKDIR="$(mktemp -d --tmpdir "${RELEASE}-certs.XXXXXX.tmp")"
+
 trap cleanup EXIT
 ok "Will search for releases named [${RELEASE}] in all namespaces"
 while read NAMESPACE POD READY STATUS RESTARTS AGE IP REST ; do
 
-	CERT_FILE="$(mktemp --tmpdir "${RELEASE}.${NAMESPACE}.crt")"
+	CERT_FILE="${WORKDIR}/${RELEASE}.${NAMESPACE}.crt"
 
 	doing "Applying the trust for the ${NAMESPACE} namespace (pod ${POD}, IP ${IP})"
 
@@ -98,7 +100,4 @@ while read NAMESPACE POD READY STATUS RESTARTS AGE IP REST ; do
 	else
 		err "Failed to apply the trust for the CA (rc=${?})"
 	fi
-
-	# Clean out the temporary file
-	cleanup
 done < <(kubectl --context "${CONTEXT}" get pod --all-namespaces --selector "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/name=acme" --no-headers -o wide)
