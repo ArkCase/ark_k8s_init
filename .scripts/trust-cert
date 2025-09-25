@@ -71,6 +71,8 @@ if [ $(/usr/bin/id -u) == 0 ] ; then
 	for UPDATER in "${CA_UPDATER[@]}" ; do
 		IFS=":" read EXE TARGET <<< "${UPDATER}"
 		if type -P "${EXE}" &>/dev/null ; then
+			mkdir -p "${TARGET}" &>/dev/null || continue
+			TARGET="$(mktemp -p "${TARGET}" "arkcase-cert-XXXXXX.crt")"
 			echo_run cp -vf "${CERT_FILE}" "${TARGET}"
 			RC=0
 			echo_run "${EXE}" || RC=${?}
