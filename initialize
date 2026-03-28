@@ -258,7 +258,7 @@ ok "Helm is installed"
 # Install/Upgrade Kubernetes
 #
 [ -v K8S_VER ] || K8S_VER=""
-[ -n "${K8S_VER}" ] || K8S_VER="1.32"
+[ -n "${K8S_VER}" ] || K8S_VER="1.33"
 
 K8S_UPGRADE_VER=""
 if KUBEADM_VER="$(kubeadm version -o json)" ; then
