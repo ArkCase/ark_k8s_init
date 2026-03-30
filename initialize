@@ -255,6 +255,16 @@ fi
 ok "Helm is installed"
 
 #
+# Install act (for container development using GitHub actions)
+#
+if ! act --version &>/dev/null ; then
+	doing "Installing Act..."
+	curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/nektos/act/master/install.sh | bash
+	act --version &>/dev/null
+fi
+ok "Act is installed (v$(act --version))"
+
+#
 # Install/Upgrade Kubernetes
 #
 [ -v K8S_VER ] || K8S_VER=""
