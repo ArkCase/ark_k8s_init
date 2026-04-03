@@ -1,0 +1,252 @@
+#!/bin/bash
+set -euo pipefail
+. /.functions
+
+DEFAULT_MVN_CENTRAL_REPO="https://repo1.maven.org/maven2"
+
+set_or_default DOWNLOAD_RETRY 30
+set_or_default DOWNLOAD_RETRY_SEC 5
+
+download()
+{
+	local URL="${1}"
+	local AUTH="${2:-""}"
+	local DEST="${3:-""}"
+	[ -n "${AUTH}" ] && AUTH="--user ${AUTH}"
+	[ -n "${DEST}" ] && DEST=(--output "${DEST}")
+	local ATTEMPT=1
+	while [ ${ATTEMPT} -lt ${DOWNLOAD_RETRY} ] ; do
+		if [ ${ATTEMPT} -gt 1 ] ; then
+			sleep ${DOWNLOAD_RETRY_SEC} || return ${?}
+		fi
+
+		local RC=0
+		curl \
+			--location \
+			--fail \
+			--disallow-username-in-url \
+			--retry-connrefused \
+			--retry-delay ${DOWNLOAD_RETRY_SEC} \
+			--retry ${DOWNLOAD_RETRY} \
+			--config <(echo -n "${AUTH}") \
+			"${DEST[@]}" \
+			"${URL}" || RC=${?}
+
+		# If there were no errors, return immediately
+		[ ${RC} -eq 0 ] && return 0
+
+		# If there's a retryable error, then do so
+		case ${RC} in
+			16 | 18 | 26 | 28 | 35 | 36 | 55 | 56 |  92 | 95 | 96 ) (( ATTEMPT++ )) ; continue ;;
+		esac
+
+		return ${RC}
+	done
+}
+
+decrypt()
+{
+	local VALUE="${1}"
+	local REQUIRED="$(to_boolean "${2:-"false"}")"
+
+	if "${REQUIRED}" ; then
+		[ -v MVN_GET_ENCRYPTION_KEY ] || fail "No MVN_GET_ENCRYPTION_KEY value is set, cannot continue"
+		[ -n "${MVN_GET_ENCRYPTION_KEY}" ] || fail "The MVN_GET_ENCRYPTION_KEY value is empty, cannot continue"
+	fi
+
+	[ -v MVN_GET_ENCRYPTION_KEY ] || local MVN_GET_ENCRYPTION_KEY=""
+	if [ -n "${MVN_GET_ENCRYPTION_KEY}" ] ; then
+		local RC=0
+		openssl aes-256-cbc \
+			-a -A -salt -iter 5 -d \
+			-kfile <(echo -n "${MVN_GET_ENCRYPTION_KEY}") 2>/dev/null < <(echo -n "${VALUE}") || RC=${?}
+		[ ${RC} -eq 0 ] && return 0
+		"${REQUIRED}" && fail "Failed to decrypt the value (rc=${RC})"
+	fi
+
+	# Nothing to decrypt with, or decryption failed but wasn't required
+	echo -n "${VALUE}"
+	return 0
+}
+
+cleanup()
+{
+	[ -v WORKDIR ] && is_dir "${WORKDIR}" && rm -rf "${WORKDIR}" &>/dev/null
+}
+
+usage()
+{
+	{
+		echo -e "usage: ${BASH_ARGV0:-${BASH_SOURCE:-${0}}} artifactSpec [repoUrl] target"
+		echo -e ""
+		echo -e "\t\tartifactSpec: groupId:artifactId[:version[:packaging[:classifier]]]"
+		echo -e "\t\trepoUrl:      URL to the Maven repository housing the artifact (http:// or https://)"
+		echo -e "\t\ttarget:       The final path where the file will be copied into. If it's"
+		echo -e "\t\t              a directory, the downloaded filename will be preserved."
+		echo -e ""
+		echo -e "\t\tIf the repoUrl is not given, the repository specified by the MVN_CENTRAL_REPO"
+		echo -e "\t\tenvironment variable will be used. If this variable is not set, empty, or invalid,"
+		echo -e "\t\tthen the default Maven Central Repository URL at ${DEFAULT_MVN_CENTRAL_REPO}"
+		echo -e "\t\twill be used."
+	} 1>&2
+	exit 1
+}
+
+[ ${#} -ge 2 ] && [ ${#} -le 3 ] || usage
+if [ ${#} -eq 3 ] ; then
+	ARTIFACT="${1}"
+	REPO_URL="${2}"
+	DEST="${3}"
+else
+	ARTIFACT="${1}"
+	DEST="${2}"
+
+	set_or_default MVN_CENTRAL_REPO
+	[[ "${MVN_CENTRAL_REPO,,}" =~ ^https?:// ]] || MVN_CENTRAL_REPO="${DEFAULT_MVN_CENTRAL_REPO}"
+	# TODO: More URL validation?
+	REPO_URL="${MVN_CENTRAL_REPO}"
+fi
+
+[[ "${ARTIFACT}" =~ ^([^:[:space:]]+):([^:[:space:]]+)(:([^:[:space:]]+)?(:([^:[:space:]]+)?(:([^:[:space:]]+)?)?)?)?$ ]] || fail "The artifact string [${ARTIFACT}] is not valid"
+GROUP_ID="${BASH_REMATCH[1]}"
+ARTIFACT_ID="${BASH_REMATCH[2]}"
+VERSION="${BASH_REMATCH[4]}"
+EXTENSION="${BASH_REMATCH[6]}"
+CLASSIFIER="${BASH_REMATCH[8]}"
+
+[ -n "${VERSION}" ] || VERSION="RELEASE"
+
+require_exe xmlstarlet xmllint curl
+
+NEED_DECRYPT="true"
+if [ -v MVN_GET_SERVER_ID ] ; then
+	# We have a server ID whose username/password combo we wish to consume
+	[ -n "${MVN_GET_SERVER_ID}" ] || fail "The value in MVN_GET_SERVER_ID may not be the empty string"
+	require_exe mvn-crypt
+	MVN_GET_USERNAME="$(mvn-crypt --quiet server decrypt "${MVN_GET_SERVER_ID}" username)"
+	[ -n "${MVN_GET_USERNAME}" ] || fail "The username for server [${MVN_GET_SERVER_ID}] is empty or nonexistent"
+	MVN_GET_PASSWORD="$(mvn-crypt --quiet server decrypt "${MVN_GET_SERVER_ID}" password)"
+	[ -n "${MVN_GET_PASSWORD}" ] || fail "The password for server [${MVN_GET_SERVER_ID}] is empty or nonexistent"
+	NEED_DECRYPT="false"
+fi
+
+AUTH=""
+if [ -v MVN_GET_USERNAME ] && [ -v MVN_GET_PASSWORD ] ; then
+	[ -n "${MVN_GET_USERNAME}" ] || fail "The value in MVN_GET_USERNAME may not be the empty string"
+	[ -n "${MVN_GET_PASSWORD}" ] || fail "The value in MVN_GET_PASSWORD may not be the empty string"
+
+	# If we need to decrypt values, now is the time
+	if "${NEED_DECRYPT}" ; then
+		# We only do this if it hasn't already been done by MVN_CRYPT, above ...
+		MVN_GET_USERNAME="$(decrypt "${MVN_GET_USERNAME}")" || fail "Failed to decrypt the value in MVN_GET_USERNAME"
+		MVN_GET_PASSWORD="$(decrypt "${MVN_GET_PASSWORD}" "true")" || fail "Failed to decrypt the value in MVN_GET_PASSWORD"
+	fi
+
+	# Join everything together into happy matrimony
+	AUTH="${MVN_GET_USERNAME}:${MVN_GET_PASSWORD}"
+fi
+
+[[ "${REPO_URL,,}" =~ ^https?:// ]] || fail "Repository [${REPO_URL}] from artifact parameter [${ARTIFACT}] is not valid"
+
+GROUP_PATH="${GROUP_ID//./\/}"
+BASE="${REPO_URL}/${GROUP_PATH}/${ARTIFACT_ID}"
+
+doing "Downloading:"
+say "\tArtifact:    [${ARTIFACT}]"
+say "\tRepository:  [${REPO_URL}]"
+say "\tDestination: [${DEST}]"
+
+export WORKDIR="$(mktemp -d)"
+trap cleanup EXIT
+
+FINAL_VERSION="${VERSION}"
+SUPPORT_SNAPSHOT="true"
+if [ "${VERSION}" == "LATEST" ] || [ "${VERSION}" == "RELEASE" ] ; then
+	# This shouldn't be necessary, as the metadata should never reference SNAPSHOTS
+	# in the <release> element, but we take precautions nonetheless
+	[ "${VERSION}" == "RELEASE" ] && SUPPORT_SNAPSHOT="false"
+	say "⚠️ Identifying the ${VERSION} artifact version to download..."
+
+	RC=0
+	XML="${WORKDIR}/maven-metadata.xml"
+	OUT="$(download "${BASE}/maven-metadata.xml" "${AUTH}" "${XML}" 2>&1)" || RC=${?}
+	[ ${RC} -eq 0 ] || fail "Failed to download the artifact metadata for ${GROUP_ID}:${ARTIFACT_ID} from [${BASE}/maven-metadata.xml] (rc=${RC}):\n${OUT}"
+	xmllint "${XML}" &>/dev/null || fail "The artifact metadata for ${GROUP_ID}:${ARTIFACT_ID} downloaded from [${BASE}/maven-metadata.xml] is not valid XML"
+
+	FINAL_VERSION="$(xmlstarlet sel -t -v "/metadata/versioning/${VERSION,,}" < "${XML}")" || fail "Failed to identify the ${VERSION} version for ${GROUP_ID}:${ARTIFACT_ID} from the XML at [${BASE}/maven-metadata.xml]"
+	say "\t✅ The ${VERSION} version is ${FINAL_VERSION}"
+	VERSION="${FINAL_VERSION}"
+fi
+
+# If the final version is a snapshot, then we must resolve that
+BASE+="/${VERSION}"
+if "${SUPPORT_SNAPSHOT}" && [[ "${VERSION^^}" =~ (^|[^a-zA-Z0-9])SNAPSHOT$ ]] ; then
+	say "⚠️ This version is a SNAPSHOT - identifying the final artifact to download"
+
+	RC=0
+	XML="${WORKDIR}/maven-metadata.xml"
+	OUT="$(download "${BASE}/maven-metadata.xml" "${AUTH}" "${XML}" 2>&1)" || RC=${?}
+	[ ${RC} -eq 0 ] || fail "Failed to download the artifact metadata for ${GROUP_ID}:${ARTIFACT_ID}:${VERSION} from [${BASE}/maven-metadata.xml] (rc=${RC}):\n${OUT}"
+	xmllint "${XML}" &>/dev/null || fail "The artifact metadata for ${GROUP_ID}:${ARTIFACT_ID} downloaded from [${BASE}/maven-metadata.xml] is not valid XML"
+
+	TIMESTAMP="$(xmlstarlet sel -t -v '/metadata/versioning/snapshot/timestamp' < "${XML}")" || fail "No timestamp data is present for the required snapshot version, cannot continue"
+	BUILD_NUMBER="$(xmlstarlet sel -t -v '/metadata/versioning/snapshot/buildNumber' < "${XML}")" || fail "No build number data is present for the required snapshot version, cannot continue"
+	FINAL_VERSION="$(echo -n "${VERSION}" | /usr/bin/sed -e "s/\(\b\)SNAPSHOT\(\b\)/\1${TIMESTAMP}-${BUILD_NUMBER}\2/gi")"
+	say "\t✅ The latest SNAPSHOT version is ${FINAL_VERSION}"
+fi
+
+BASE="${BASE}/${ARTIFACT_ID}-${FINAL_VERSION}"
+TAB=""
+if [ -z "${EXTENSION}" ] ; then
+	say "⚠️ Packaging (type) not provided, will attempt to identify it from the POM"
+
+	RC=0
+	POM="${WORKDIR}/file.pom"
+	OUT="$(download "${BASE}.pom" "${AUTH}" "${POM}" 2>&1)" || RC=${?}
+	[ ${RC} -eq 0 ] || fail "Failed to download the artifact POM for ${GROUP_ID}:${ARTIFACT_ID}:${VERSION} from [${BASE}.pom] (rc=${?}):\n${OUT}"
+	xmllint "${POM}" &>/dev/null || fail "The artifact POM for ${GROUP_ID}:${ARTIFACT_ID}:${VERSION} downloaded from [${BASE}.pom] is not valid XML"
+
+	TAB="\t"
+	EXTENSION="$(xmlstarlet sel -N "p=http://maven.apache.org/POM/4.0.0" -t -v '/p:project/p:packaging' < "${POM}")" || true
+	[ -z "${EXTENSION}" ] && EXTENSION="jar"
+fi
+say "${TAB}✅ Will download the ${EXTENSION} artifact"
+
+# Must be given explicitly ...
+if [ -n "${CLASSIFIER}" ] ; then
+	say "✅ The classifier is ${CLASSIFIER}"
+	CLASSIFIER="-${CLASSIFIER}"
+fi
+
+URL="${BASE}${CLASSIFIER}.${EXTENSION}"
+FILENAME="${URL##*/}"
+
+# Check to see if the destination is
+if [ -e "${DEST}" ] ; then
+	if [ -d "${DEST}" ] ; then
+		# It's a directory, so preserve the artifact's filename
+		DEST="$(readlink -f "${DEST}")/${FILENAME}"
+	elif [ -f "${DEST}" ] ; then
+		# It's a file, so clobber it
+		DEST="$(readlink -f "${DEST}")"
+	else
+		fail "The target path at [${DEST}] is neither a directory nor a regular file, cannot continue"
+	fi
+else
+	# It doesn't exist ... check to see if the parent exists ... if it
+	# does, and is a directory, then we use DEST as the full filename.
+	PARENT="$(dirname "${DEST}")"
+	[ -e "${PARENT}" ] || mkdir -p "${PARENT}" || fail "Failed to create the parent directory [${PARENT}] ... can't save the download into [${DEST}]"
+	[ -d "${PARENT}" ] || fail "The path [${PARENT}] is not a directory ... can't save the download into [${DEST}]"
+	PARENT="$(readlink -f "${PARENT}")"
+	DEST="${PARENT}/$(basename "${DEST}")"
+fi
+
+doing "Final Version: [${FINAL_VERSION}]"
+doing "Final File:    [${DEST}]"
+doing "Final URL:     [${URL}]"
+download "${URL}" "${AUTH}" "${DEST}" || fail "Failed to complete the download (rc=${?})"
+ok "Download successful!"
+type -P render-helpers &>/dev/null || exit 0
+cleanup || true
+execute render-helpers "${DEST}" "${FINAL_VERSION}"

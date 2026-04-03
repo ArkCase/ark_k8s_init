@@ -1,0 +1,35 @@
+#!/bin/python3
+
+import os
+import sys
+import traceback
+import xml.etree.ElementTree as ET
+
+DEFAULT_ENCODING = "UTF-8"
+
+def error(*args, **kwargs):
+	print(*args, file=sys.stderr, **kwargs)
+
+def fail(*args, **kwargs):
+	error(*args, **kwargs)
+	sys.exit(1) 
+
+try:
+	tree = ET.parse(sys.stdin)
+	root = tree.getroot()
+
+	# First things first: do the replacements on both
+	# attributes and values. The XML framework should
+	# take care of all necessary escaping/quoting/etc.
+	for e in root.iter():
+		for key in e.attrib:
+			e.attrib[key] = os.path.expandvars(e.attrib[key])
+		if e.text:
+			e.text = os.path.expandvars(e.text)
+
+	# Now output the new file (comments and directives are lost)
+	print(ET.canonicalize(ET.tostring(root)))
+	sys.exit(0)
+except Exception as e:
+	exc_type, exc_value, exc_traceback = sys.exc_info()
+	fail("ERROR: failed to do the environment variable expansion:\n\n{0}".format("\n".join(traceback.format_exception(exc_type, exc_value, exc_traceback))))

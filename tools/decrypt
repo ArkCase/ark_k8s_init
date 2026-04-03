@@ -1,0 +1,26 @@
+#!/bin/bash
+set -euo pipefail
+. /.functions
+
+# Enable debugging ...
+set_as_boolean DEBUG
+${DEBUG} && set -x
+
+KEY_VAR="ENCRYPTION_KEY"
+if [ ${#} -ge 1 ] ; then
+	export V="${1}"
+	( echo "${!V}" ) &>/dev/null || fail "Invalid variable name [${V}]" 1>&2
+	unset V
+	KEY_VAR="${1}"
+fi
+
+set_or_default "${KEY_VAR}"
+if [ -n "${!KEY_VAR}" ] ; then
+	# Decrypt the value
+	exec openssl aes-256-cbc \
+		-a -A -salt -iter 5 -d \
+		-kfile <(echo -n "${!KEY_VAR}") 2>/dev/null
+else
+	# Don't decrypt anything ...
+	exec cat
+fi

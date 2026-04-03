@@ -1,0 +1,445 @@
+#!/usr/bin/python3
+
+#
+# This code is a CRUDE python port of the encryption/decryption code for Maven credentials,
+# as found in org.sonatype.plexus.components.cipher.PBECipher
+#
+# The goal is to facilitate the consumption of Maven passwords by other programs, and even
+# support recovery if necessary by end users. This is useful, for instance, when wanting
+# to fetch Maven artifacts without having to fire up Maven itself, but still consuming
+# its security configurations to avoid duplicating them
+#
+#
+# USAGE:
+#
+#     Common parameters: [-S settings-security.xml | --security settings-security.xml] [-s settings.xml | --settings settings.xml] [-l .m2-location | --location .m2-location] [-m | --master]
+#
+#     m2crypt [common] decrypt serverId value
+#         (if -m or --master are set, the serverId and value parameters are ignored, and the master password is decrypted)
+#     m2crypt [common] encrypt string
+#         (if -m or --master are set, the password is encrypted for use as a master password)
+#
+
+import argparse
+import base64
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+import hashlib
+import os
+import re
+import secrets
+import sys
+import xml.etree.ElementTree as ET
+
+#
+# General configuration values
+#
+STRING_ENCODING = "UTF8"
+SPICE_SIZE = 16
+SALT_SIZE = 8
+CHUNK_SIZE = 16
+DIGEST_ALG = "SHA-256"
+KEY_ALG = "AES"
+
+MODE_SERVER = "server"
+MODE_MASTER = "master"
+MODE_ENCRYPT = "encrypt"
+MODE_DECRYPT = "decrypt"
+
+FILE_SECURITY = "settings-security.xml"
+FILE_SETTINGS = "settings.xml"
+
+M2_NAMESPACE = "http://maven.apache.org/SETTINGS/1.0.0"
+
+#
+# Used to decorate (and un-decorate) strings
+#
+ENCRYPTED_STRING_DECORATION_START = "{"
+ENCRYPTED_STRING_DECORATION_END = "}"
+
+#
+# Used for parsing decorated strings
+#
+ENCRYPTED_STRING_PATTERN = re.compile("^.*?[^\\\\]?\\{(.*?[^\\\\])\\}.*$")
+
+#
+# This is the secret used to encrypt/decrypt the master password
+#
+MASTER_SECRET = b"settings.security"
+
+#
+# Create a new digester based on the digest algorithm
+#
+def newDigester():
+	return hashlib.new(DIGEST_ALG)
+
+def newPadding():
+	return padding.PKCS7(CHUNK_SIZE * 8)
+
+def pad(value):
+	if not value:
+		return value
+	padder = newPadding().padder()
+	return padder.update(value) + padder.finalize()
+
+def unpad(value):
+	if not value:
+		return value
+	unpadder = newPadding().unpadder()
+	return unpadder.update(value) + unpadder.finalize()
+
+#
+# Return a secure array of size random bytes
+#
+def getSalt(size):
+	return secrets.token_bytes(size)
+
+#
+# Wrap the string in the {} decorators
+#
+def decorate(string):
+	if not string:
+		string = ""
+	if type(string) != str:
+		raise Exception("The value to decorate must be a string")
+	return ENCRYPTED_STRING_DECORATION_START + string + ENCRYPTED_STRING_DECORATION_END
+
+#
+# Get the actual password value from the decorated string. If it's not
+# a decorated string, then return the string itself
+#
+def unDecorate(string):
+	if not string:
+		return string
+	m = ENCRYPTED_STRING_PATTERN.match(string)
+	if m:
+		return m.group(1)
+	return string
+
+# This should mirror the createCipher() method fairly closely, except
+# we don't care what the cipher will be used for ... we leave that to
+# the caller
+def createCipher(key, salt):
+	digester = newDigester()
+	keyAndIvLength = (SPICE_SIZE * 2)
+	keyAndIv = []
+	currentPos = 0
+	while (currentPos < keyAndIvLength):
+		digester.update(key)
+
+		if (salt):
+			digester.update(salt)
+
+		result = digester.digest()
+
+		stillNeed = keyAndIvLength - currentPos
+
+		if (len(result) > stillNeed):
+			result = result[slice(0, stillNeed)]
+
+		keyAndIv.append(result)
+
+		currentPos += len(result)
+
+		if (currentPos < keyAndIvLength):
+			digester = newDigester()
+			digester.update(result)
+
+	keyAndIv = b"".join(keyAndIv)
+	key = keyAndIv[slice(0, SPICE_SIZE)]
+	iv = keyAndIv[slice(len(key), keyAndIvLength)]
+	return Cipher(algorithms.AES(key), modes.CBC(iv))
+
+#
+# Decrypt the given value using the given key
+#
+def decryptBytes(value, key):
+	if not value:
+		return value
+	if type(value) != bytes:
+		raise Exception("The value must be either a string or a bytes object")
+	if type(key) != bytes:
+		raise Exception("The key must be either a string or a bytes object")
+
+	salt = value[slice(0, SALT_SIZE)]
+	padLen = int(value[SALT_SIZE])
+	encryptedBytes = value[slice(SALT_SIZE + 1, len(value) - padLen)]
+
+	cipher = createCipher(key, salt)
+	decryptor = cipher.decryptor()
+	return unpad(decryptor.update(encryptedBytes) + decryptor.finalize())
+
+#
+# Decrypt the given base64-encoded bytes (as a string) value using the given key, and
+# return the base64-encoded decrypted bytes (as a string)
+#
+def decryptString64(value, key):
+	if not value:
+		return value
+	if type(value) == str:
+		value = base64.b64decode(value)
+	if type(key) == str:
+		key = key.encode(STRING_ENCODING)
+	return base64.b64encode(decryptBytes(value, key)).decode(STRING_ENCODING)
+
+#
+# Decrypt the given base64-encoded bytes (as a string) value using the given key, and
+# return the plaintext decrypted string
+#
+def decryptString(value, key):
+	if not value:
+		return value
+	if type(value) == str:
+		value = base64.b64decode(value)
+	if type(key) == str:
+		key = key.encode(STRING_ENCODING)
+	try:
+		return decryptBytes(value, key).decode(STRING_ENCODING)
+	except UnicodeDecodeError:
+		return ""
+
+#
+# Decrypt a base64-encoded string that's decorated with {}, as it would be
+# in the Maven settings.xml
+#
+def decryptDecorated(value, key):
+	if not value:
+		return value
+	undec = unDecorate(value)
+	if value == undec:
+		return value
+	return decryptString(unDecorate(value), key)
+
+#
+# Encrypt the given value using the given key
+#
+def encryptBytes(value, key):
+	if not value:
+		return value
+	if type(value) != bytes:
+		raise Exception(f"The value must be either a string or a bytes object: {type(value)}")
+	if type(key) != bytes:
+		raise Exception(f"The key must be either a string or a bytes object: {type(key)}")
+
+	salt = getSalt(SALT_SIZE)
+	cipher = createCipher(key, salt)
+
+	encryptor = cipher.encryptor()
+	encryptedBytes = encryptor.update(pad(value)) + encryptor.finalize()
+	padLen = ( CHUNK_SIZE - (SALT_SIZE + len(encryptedBytes) + 1) % CHUNK_SIZE ).to_bytes(1, "little")
+	return salt + padLen + encryptedBytes + getSalt(padLen[0])
+
+#
+# Encrypt the given base64-encoded bytes (as a string) value using the given key, and
+# return the base64-encoded encrypted bytes (as a string)
+#
+def encryptString64(value, key):
+	if not value:
+		return value
+	if type(value) == str:
+		value = base64.b64decode(value)
+	if type(key) == str:
+		key = key.encode(STRING_ENCODING)
+	return base64.b64encode(encryptBytes(value, key)).decode(STRING_ENCODING)
+
+#
+# Encrypt the given string value using the given key, and return the base64-encoded
+# encrypted bytes (as a string)
+#
+def encryptString(value, key):
+	if not value:
+		return value
+	if type(value) == str:
+		value = value.encode(STRING_ENCODING)
+	if type(key) == str:
+		key = key.encode(STRING_ENCODING)
+	return base64.b64encode(encryptBytes(value, key)).decode(STRING_ENCODING)
+
+#
+# Encrypt a base64-encoded string and decorate it with {}, so it can be used
+# in the Maven settings.xml
+#
+def encryptAndDecorate(value, key):
+	result = ""
+	if value:
+		result = encryptString(value, key)
+	return decorate(result)
+
+#
+# Load the master password from the settings-security.xml, or return
+# None if there is no such password
+#
+def readMasterPassword(securityFile):
+	if not securityFile:
+		return None
+	settingsSecurity = ET.parse(securityFile)
+	if not settingsSecurity:
+		return None
+	master = settingsSecurity.findall("master")
+	if not master:
+		return None
+	return master[0].text
+
+def readServerValue(settingsFile, serverId, valueName):
+	if not settingsFile:
+		return None
+
+	ns = { "s": M2_NAMESPACE }
+	settings = ET.parse(settingsFile, )
+
+	pred = f"./s:servers/s:server[s:id = \"{serverId}\"]/s:{valueName}"
+	for value in settings.findall(pred, ns):
+		return value.text
+
+	return None
+
+def decryptMasterPassword(securityFile):
+	if not securityFile:
+		raise Exception("No security file found to read the master password from")
+	masterPass = readMasterPassword(securityFile)
+	if masterPass is None:
+		raise Exception("No master password is set")
+	return decryptDecorated(masterPass, MASTER_SECRET)
+
+def __main__():
+	parser = argparse.ArgumentParser(description = "Decrypt Maven Passwords")
+	parser.add_argument("-l", "--location", metavar=".m2-location", action="store", help="The location to use as the directory where the Maven settings files are housed (normally $HOME/.m2)", nargs=1)
+	parser.add_argument("-s", "--settings", metavar="settings.xml", action="store", help="The XML file to use as the settings.xml file instead of the default", nargs=1)
+	parser.add_argument("-S", "--security", metavar="settings-security.xml", action="store", help="The XML file to use as the settings-security.xml file instead of the default", nargs=1)
+	parser.add_argument("-q", "--quiet", action="store_true", help="Disable errors when files aren't found, and just return empty values")
+
+	commands = parser.add_subparsers(help="Command Help", dest="mode")
+
+	master = commands.add_parser(MODE_MASTER, help="Master Crypto Operations")
+	masterCmd = master.add_subparsers(help="Encryption Tools", dest="op")
+
+	encrypt = masterCmd.add_parser(MODE_ENCRYPT, help="Encrypt Values")
+	encrypt.add_argument("valueToEncrypt", action="store", help="The string value to encrypt for use as a master password", nargs=1)
+
+	decrypt = masterCmd.add_parser(MODE_DECRYPT, help="Decrypt Values")
+	decrypt.add_argument("valueToDecrypt", action="store", help="The string to decrypt. If not given, the current master password will be decrypted", nargs="?")
+
+	server = commands.add_parser(MODE_SERVER, help="Server Crypto Operations")
+	serverCmd = server.add_subparsers(help="Encryption Tools", dest="op")
+
+	encrypt = serverCmd.add_parser(MODE_ENCRYPT, help="Encrypt Values")
+	encrypt.add_argument("valueToEncrypt", action="store", help="The string value to encrypt for server use, using the master password", nargs=1)
+
+	decrypt = serverCmd.add_parser(MODE_DECRYPT, help="Decrypt Values")
+	decrypt.add_argument("serverId", action="store", help="The server whose value you're looking to decrypt", nargs=1)
+	decrypt.add_argument("valueName", action="store", choices=("username", "password", "privateKey", "passphrase"), help="The value within the server's config that you're looking to decrypt", nargs=1)
+
+	args = parser.parse_args()
+
+	HOME = os.path.expanduser("~")
+	M2_CANDIDATES = [ f"{HOME}/.m2" ]
+	try:
+		h = os.environ["M2_HOME"]
+		if h:
+			M2_CANDIDATES.append(h)
+	except KeyError:
+		# If the M2_HOME envvar isn't set, we don't sweat it
+		pass
+
+	#
+	# This will select the first available M2_HOME value, or leave it
+	# as None if none is available
+	#
+	M2_HOME = None
+	for c in M2_CANDIDATES:
+		if os.path.exists(c) and os.path.isdir(c):
+			M2_HOME = os.path.realpath(c)
+			break
+
+	security = args.security
+	settings = args.settings
+	location = args.location
+
+	# If we weren't given a specific location to find files within,
+	# we use the system default
+	if location is None:
+		location = M2_HOME
+	else:
+		location = location
+
+	# If we haven't been given an explicit settings-security.xml file,
+	# find it in the location we're meant to look in
+	if location and (not security):
+		security = f"{location}/{FILE_SECURITY}"
+
+	# If we haven't been given an explicit settings.xml file,
+	# find it in the location we're meant to look in
+	if location and (not settings):
+		settings = f"{location}/{FILE_SETTINGS}"
+
+	# If we were given a settings-security.xml file, validate its existence!
+	try:
+		if security:
+			if not os.path.exists(security):
+				raise Exception(f"Security file not found at [{security}]")
+			if not os.path.isfile(security):
+				raise Exception(f"Path [{security}] is not a regular file")
+			security = os.path.realpath(security)
+
+		# If we were given a settings.xml file, validate its existence!
+		if settings:
+			settings = settings
+			if not os.path.exists(settings):
+				raise Exception(f"Settings file not found at [{settings}]")
+			if not os.path.isfile(settings):
+				raise Exception(f"Path [{settings}] is not a regular file")
+			settings = os.path.realpath(settings)
+
+		if args.mode == MODE_MASTER:
+			if args.op == MODE_ENCRYPT:
+				masterPass = encryptAndDecorate(args.valueToEncrypt[0], MASTER_SECRET)
+			elif args.op == MODE_DECRYPT:
+				if args.valueToDecrypt is None:
+					masterPass = decryptMasterPassword(security)
+				else:
+					masterPass = decryptDecorated(args.valueToDecrypt, MASTER_SECRET)
+			else:
+				master.print_help(sys.stderr)
+				sys.exit(1)
+
+			if masterPass:
+				print(f"{masterPass}")
+			exit(0)
+
+		if args.mode == MODE_SERVER:
+			if (not settings) or (not security):
+				raise Exception("To decrypt server values the settings.xml and settings-security.xml files must both exist")
+			masterPass = decryptMasterPassword(security)
+			if not masterPass:
+				raise Exception("No master password was decoded, cannot continue!")
+
+			if args.op == MODE_ENCRYPT:
+				finalPass = encryptAndDecorate(args.valueToEncrypt[0], masterPass)
+			elif args.op == MODE_DECRYPT:
+				finalPass = decryptDecorated(readServerValue(settings, args.serverId[0], args.valueName[0]), masterPass)
+			else:
+				server.print_help(sys.stderr)
+				sys.exit(1)
+
+			if finalPass:
+				print(f"{finalPass}")
+			exit(0)
+		
+		parser.print_help(sys.stderr)
+		sys.exit(1)
+	except Exception as e:
+		if args.quiet:
+			return True
+		raise e
+
+#
+# First things first: are we being run as a script?
+#
+if __name__ == "__main__":
+	try:
+		if __main__():
+			exit(0)
+		exit(1)
+	except Exception as e:
+		print(f"{e}")
+		exit(1)

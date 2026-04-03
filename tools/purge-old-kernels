@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+V="(0|[1-9][0-9]*)"
+RE_VERSION="(${V}[.]${V}[.]${V}(-${V})?)(-([-a-zA-Z0-9]+))?"
+
 say()
 {
 	echo -e "${@}"
@@ -20,19 +23,20 @@ fail()
 
 list_old_kernels()
 {
-	/usr/bin/dpkg -l --robot | \
-		/usr/bin/awk '{ print $2 }' | \
-		/usr/bin/grep '^linux-image-' | \
-		/usr/bin/grep -v '^linux-image-generic-hwe' | \
-		/usr/bin/sed -e 's;^linux-image-;;g' | \
-		/usr/bin/sort -r -V | \
-		/usr/bin/tail -n +2
+	/usr/bin/dpkg -S /boot/vmlinuz-* | \
+		/usr/bin/sed -e 's;^.*: /boot/vmlinuz-;;g' | \
+		/usr/bin/grep -v "^$(uname -r)$" | \
+		/usr/bin/sort -V -r
 }
 
 list_kernel_packages()
 {
 	local VERSION="${1}"
-	/usr/bin/dpkg -l | /usr/bin/fgrep "${VERSION}" | fgrep "linux-" | /usr/bin/awk '{ print $2 }'
+	[[ "${VERSION}" =~ ^${RE_VERSION}$ ]] && VERSION="${BASH_REMATCH[1]}"
+	/usr/bin/dpkg -l | \
+		/usr/bin/awk '{ print $2 }' | \
+		/usr/bin/grep '^linux-' | \
+		/usr/bin/fgrep "${VERSION}"
 }
 
 readarray -t KERNELS < <(list_old_kernels)

@@ -1,0 +1,11 @@
+#!/usr/bin/python3
+
+import yaml
+import json
+import sys
+
+try:
+	json_object = json.load(sys.stdin)
+	yaml.dump(json_object, sys.stdout)
+except KeyboardInterrupt:
+	sys.exit(1)
