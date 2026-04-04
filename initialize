@@ -259,7 +259,10 @@ ok "Helm is installed"
 #
 if ! act --version &>/dev/null ; then
 	doing "Installing Act..."
-	curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/nektos/act/master/install.sh | bash
+	(
+		cd /usr/local
+		curl -fsSL https://raw.githubusercontent.com/nektos/act/master/install.sh | bash
+	)
 	act --version &>/dev/null
 fi
 ok "Act is installed (v$(act --version))"
