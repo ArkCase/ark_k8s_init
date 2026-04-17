@@ -26,6 +26,22 @@ __cmd_stop()
 	( set -x ; sudo systemctl stop kubelet.service {cri-,}docker.s{ocket,ervice} )
 }
 
+__cmd_cleanup()
+{
+	say "Cleaning up all vestigial data from K8s..."
+	(
+		set -x
+		say "Before..."
+		docker system df
+		for n in system volume buildx ; do
+			docker "${n}" prune -a --force
+		done
+		say "After..."
+		docker system df
+	)
+	return 0
+}
+
 __cmd_unjam()
 {
 	say "Restarting the Calico Node pods..."
