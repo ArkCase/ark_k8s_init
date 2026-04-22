@@ -86,6 +86,11 @@ if [ "$(/usr/bin/id -u)" != "0" ] ; then
 	"${SCRIPT_DIR}/init-aws-config"
 
 	#
+	# Configure Act for the calling user
+	#
+	"${SCRIPT_DIR}/init-act-config"
+
+	#
 	# Create the root CA for ArkCase
 	#
 	"${BASE_DIR}/create-arkcase-ca"
@@ -156,6 +161,7 @@ EXTRA_PACKAGES=(
 	curl
 	git
 	gnupg
+	gettext-base
 	jq
 	libnss3-tools
 	moreutils
@@ -255,13 +261,22 @@ fi
 ok "Helm is installed"
 
 #
+# Install some important, common-use scripts
+#
+doing "Installing/updating the base functions script..."
+"${SCRIPT_DIR}/install-base-scripts"
+
+#
+# Install GitHub CLI
+#
+doing "Installing/Updating GH..."
+"${SCRIPT_DIR}/install-gh"
+
+#
 # Install act (for container development using GitHub actions)
 #
 doing "Installing/Updating Act..."
 "${SCRIPT_DIR}/install-act" /usr/local/bin
-
-doing "Installing/updating the base functions script..."
-"${SCRIPT_DIR}/install-base-scripts"
 
 #
 # Install/Upgrade Kubernetes

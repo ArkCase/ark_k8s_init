@@ -1,0 +1,37 @@
+#!/bin/bash
+
+set -euo pipefail
+
+timestamp()
+{
+	date -Ins -u
+}
+
+say()
+{
+	echo -e "$(timestamp): ${@}"
+}
+
+fail()
+{
+	say "❌ ${@}" 1>&2
+	exit ${EXIT_CODE:-1}
+}
+
+if [ "$(/usr/bin/id -u)" != "0" ] ; then
+	say "⚠️ Not running as root, must escalate privileges!"
+	exec sudo -EH "PATH=${PATH}" "${0}" "${@}"
+fi
+
+GITHUB_KEYRING="https://cli.github.com/packages/githubcli-archive-keyring.gpg"
+GITHUB_REPO="https://cli.github.com/packages"
+
+TRUSTED_GPG="/etc/apt/trusted.gpg.d/github-archive.gpg"
+
+curl -fsSL -o "${TRUSTED_GPG}" "${GITHUB_KEYRING}" || fail "Failed to download the keyring from GitHub (rc=${?})"
+chmod u=rwX,go=r "${TRUSTED_GPG}" || fail "Failed to adjust the permissions on the downloaded GPG keyring"
+echo "deb [arch=$(dpkg --print-architecture)] ${GITHUB_REPO} stable main" > /etc/apt/sources.list.d/github-cli.list || fail "Failed to generate the Debian package list for GH CLI"
+
+apt-get update || fail "Failed to update the package listings"
+apt-get install -y gh || fail "Failed to install GH CLI"
+exit 0

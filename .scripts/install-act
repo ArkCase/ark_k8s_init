@@ -55,9 +55,9 @@ usage()
 	exit 1
 }
 
-REG="207428623785.dkr.ecr.us-east-1.amazonaws.com"
+REG="public.ecr.aws"
 REPO="arkcase/act"
-VER="0.2.87-arm"
+VER="0.2.87_arm"
 IMAGE="${REG}/${REPO}:${VER}"
 SRC_ACT="act"
 TGT_ACT="${SRC_ACT}"

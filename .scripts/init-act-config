@@ -1,0 +1,61 @@
+#!/bin/bash
+SCRIPT="$(readlink -f "${BASH_SOURCE:-${0}}")"
+BASEDIR="$(dirname "${SCRIPT}")"
+SCRIPT="$(basename "${SCRIPT}")"
+
+set -euo pipefail
+
+timestamp()
+{
+	date -Ins -u
+}
+
+say()
+{
+	echo -e "$(timestamp): ${@}"
+}
+
+err()
+{
+	say "❌ ${@}"
+}
+
+fail()
+{
+	err "${@}"
+	exit ${EXIT_CODE:-1}
+}
+
+is_installed()
+{
+	local DIR="${1}"
+	[ -f "${DIR}/actrc" ] && return 0
+	[ -f "${DIR}/env" ] && return 0
+	[ -f "${DIR}/secrets" ] && return 0
+	return 1
+}
+
+CURRENT_USER="$(id -un)"
+HOME="$(eval echo ~${CURRENT_USER})"
+
+if [ ! -d "${HOME}" ] ; then
+	err "❌ No home directory [${HOME}] for user [${CURRENT_USER}] ... can't configure Act"
+	exit 0
+fi
+
+[ -v CONFIG_BASE ] || CONFIG_BASE="${HOME}/.config"
+[ -v CONFIG_DIR ] || CONFIG_DIR="${CONFIG_BASE}/act"
+
+is_installed "${CONFIG_DIR}" && say "✅ ACT configuration is already present - will not overwrite!" && exit 0
+say "ACT Configuration is not installed!"
+
+mkdir -p "${CONFIG_DIR}" || fail "Failed to create the configuration directory [${CONFIG_DIR}]"
+
+CONF="${BASEDIR}/act-config.bin"
+[ -f "${CONF}" ] || exit 0
+
+say "🔑 Decrypting the Act configuration..."
+CONF_TAR="$(mktemp)"
+openssl aes-256-cbc -a -A -d -salt -iter 1000 -in "${CONF}" -out "${CONF_TAR}" || fail "Failed to decrypt the Act configuration"
+tar -C "${CONFIG_DIR}" -xzvf "${CONF_TAR}" || fail "Failed to extract the Act configuration"
+say "✅ ACT configuration initialized!"
