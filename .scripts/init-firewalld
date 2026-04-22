@@ -1,0 +1,134 @@
+#!/bin/bash
+set -euo pipefail
+
+timestamp()
+{
+	date -Ins -u
+}
+
+say()
+{
+	echo -e "$(timestamp): ${@}"
+}
+
+fail()
+{
+	say "❌ ${@}" 1>&2
+	exit ${EXIT_CODE:-1}
+}
+
+find_cluster_parameter()
+{
+	local PARAM="${1}"
+	fgrep -- "--${PARAM}=" | sed -e "s;--${PARAM}=;;g" -e 's;^\s*;;g' -e 's;,\s*$;;g' | sort -u | while read VAL ; do
+		jq -n --argjson VAL "${VAL}" '{ "key": $VAL }' | jq -r ".key"
+	done
+}
+
+run_or_fail()
+{
+	local MSG="${1}"
+	shift
+	local OUT=""
+	local RC=0
+	OUT="$( "${@}" 2>&1 )" || RC=${?}
+	[ ${RC} -eq 0 ] && return 0
+	fail "${MSG} (rc=${RC}): ${OUT}"
+}
+
+cleanup()
+{
+	[ -v TEMP_FILE ] && rm -rf "${TEMP_FILE}" &>/dev/null
+}
+
+[ -d "/etc/firewalld" ] || exit 0
+
+# Ok ... so we're going to do this configuration ... let's escalate first!
+if [ "$(/usr/bin/id -u)" != "0" ] ; then
+	say "⚠️ Not running as root, must escalate privileges!"
+	exec sudo -EH "PATH=${PATH}" "${0}" "${@}"
+fi
+
+DOCKER_NETWORK_INFO="$(docker network inspect bridge)" || fail "Failed to inspect the Docker networking"
+
+readarray -t DOCKER_SUBNETS < <(jq -r ".[].IPAM.Config[].Subnet" <<< "${DOCKER_NETWORK_INFO}" | sort -u)
+
+NETWORKING="$(kubectl --context local --namespace kube-system get configmap kubeadm-config -o json | jq -r ".data.ClusterConfiguration" | yaml2json | jq -r ".networking")"
+
+POD_CIDR="$(jq -r ".podSubnet" <<< "${NETWORKING}")"
+SVC_CIDR="$(jq -r ".serviceSubnet" <<< "${NETWORKING}")"
+
+KUBERNETES_SUBNETS=( "${POD_CIDR}" "${SVC_CIDR}" )
+
+TEMP_FILE="$(mktemp temp-XXXXXXXX.xml)"
+trap cleanup EXIT
+for TARGET in docker kubernetes ; do
+
+	if firewall-cmd --permanent --info-ipset="${TARGET}" &>/dev/null ; then
+		say "Delete the existing ipset for ${TARGET}..."
+		run_or_fail "Couldn't delete the existing ipset for ${TARGET}!" firewall-cmd --permanent --delete-ipset="${TARGET}"
+	fi
+
+	ARR="${TARGET^^}_SUBNETS"
+	[ -v "${ARR}" ] || continue
+	declare -n "ARR=${ARR}"
+
+	[ "${#ARR[@]}" -gt 0 ] || continue
+
+	# Create the new ipset
+	say "Create the ipset for ${TARGET}..."
+	run_or_fail "Failed to create the new ipset for ${TARGET}" firewall-cmd --permanent --new-ipset="${TARGET}" --type=hash:net
+
+	# Add the entries harvested above
+	for CIDR in "${ARR[@]}" ; do
+		# This avoids duplicates
+		firewall-cmd --permanent --ipset="${TARGET}" --query-entry="${CIDR}" &>/dev/null && continue
+
+		# Add the entry
+		say "Add CIDR ${CIDR} ..."
+		run_or_fail "Failed to add the CIDR [${CIDR}] to the ipset for ${TARGET}" firewall-cmd --permanent --ipset="${TARGET}" --add-entry="${CIDR}"
+	done
+
+	if firewall-cmd --permanent --info-zone="${TARGET}" &>/dev/null ; then
+		say "Delete the existing zone for ${TARGET}..."
+		run_or_fail "Couldn't delete the zone for ${TARGET}" firewall-cmd --permanent --delete-zone="${TARGET}"
+	fi
+
+	cat <<-EOF > "${TEMP_FILE}"
+	<?xml version="1.0" encoding="utf-8"?>
+	<zone version="1.0" target="ACCEPT">
+	  <short>${TARGET}</short>
+	  <description>zone for ${TARGET} elements</description>
+	  <forward/>
+	  <source ipset="${TARGET}"/>
+	  <rule family="ipv4">
+	    <destination ipset="${TARGET}" invert="True" />
+	    <masquerade/>
+	  </rule>
+	</zone>
+	EOF
+
+	say "Create the zone for ${TARGET}..."
+	run_or_fail "Failed to create the new zone for ${TARGET}" firewall-cmd --permanent --new-zone-from-file="${TEMP_FILE}" --name="${TARGET}"
+
+	POLICY="${TARGET}-in"
+	if firewall-cmd --permanent --info-policy="${POLICY}" &>/dev/null ; then
+		say "Delete the existing incoming policy for ${TARGET}..."
+		run_or_fail "Couldn't delete the incoming policy for ${TARGET}" firewall-cmd --permanent --delete-policy="${POLICY}"
+	fi
+
+	cat <<-EOF > "${TEMP_FILE}"
+	<?xml version="1.0" encoding="utf-8"?>
+	<policy version="1.0" target="ACCEPT">
+	  <description>allow forwarding to the ${TARGET} zone</description>
+	  <ingress-zone name="ANY"/>
+	  <egress-zone name="${TARGET}"/>
+	</policy>
+	EOF
+
+	say "Add the incoming policy for ${TARGET}..."
+	run_or_fail "Failed to create the new incoming policy for ${TARGET}" firewall-cmd --permanent --new-policy-from-file="${TEMP_FILE}" --name="${POLICY}"
+done
+
+run_or_fail "Failed to reload the firewalld configuration" firewall-cmd --reload
+say "✅ Firewall configuration complete!"

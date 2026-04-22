@@ -348,6 +348,15 @@ fi
 )
 
 #
+# Configure the local Firewalld stuff
+#
+(
+	doing "Configuring the Docker/Kubernetes-related stuff for the firewalld..."
+	set -euo pipefail
+	"${SCRIPT_DIR}/init-firewalld"
+)
+
+#
 # Install AWS CLI
 #
 if ! aws --version &>/dev/null ; then
