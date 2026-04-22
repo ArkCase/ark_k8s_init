@@ -58,4 +58,12 @@ say "🔑 Decrypting the Act configuration..."
 CONF_TAR="$(mktemp)"
 openssl aes-256-cbc -a -A -d -salt -iter 1000 -in "${CONF}" -out "${CONF_TAR}" || fail "Failed to decrypt the Act configuration"
 tar -C "${CONFIG_DIR}" -xzvf "${CONF_TAR}" || fail "Failed to extract the Act configuration"
+ACTRC="${CONFIG_DIR}/actrc"
+if [ -f "${ACTRC}" ] ; then
+	(
+		export CONFIG_DIR="$(readlink -f "${CONFIG_DIR}")"
+		export GAT_CHECKOUT_DIR='${GAT_CHECKOUT_DIR}'
+		envsubst < "${ACTRC}" | sponge "${ACTRC}"
+	)
+fi
 say "✅ ACT configuration initialized!"
