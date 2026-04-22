@@ -225,7 +225,7 @@ ok "Docker is installed and running"
 if ! systemctl is-active --quiet cri-docker.service  ; then
 	if ! is_installed cri-dockerd ; then
 		[ -v CRI_VER ] || CRI_VER=""
-		[ -n "${CRI_VER}" ] || CRI_VER="0.3.16"
+		[ -n "${CRI_VER}" ] || CRI_VER="0.3.24"
 		[ -v CRI_DISTRO ] || CRI_DISTRO=""
 		[ -n "${CRI_DISTRO}" ] || CRI_DISTRO="jammy"
 		doing "Installing CRI-Docker v${CRI_VER} (${CRI_DISTRO})..."
@@ -247,7 +247,7 @@ ok "CRI-Docker is installed and running"
 #
 if ! helm version &>/dev/null ; then
 	[ -v HELM_VER ] || HELM_VER=""
-	[ -n "${HELM_VER}" ] || HELM_VER="3.15.2"
+	[ -n "${HELM_VER}" ] || HELM_VER="3.18.5"
 	doing "Installing Helm v${HELM_VER}..."
 	curl -fsSL https://get.helm.sh/helm-v${HELM_VER}-linux-amd64.tar.gz | tar -C /usr/local/bin --strip-components=1 -xzvf - linux-amd64/helm
 	helm version &>/dev/null
@@ -257,15 +257,11 @@ ok "Helm is installed"
 #
 # Install act (for container development using GitHub actions)
 #
-if ! act --version &>/dev/null ; then
-	doing "Installing Act..."
-	(
-		cd /usr/local
-		curl -fsSL https://raw.githubusercontent.com/nektos/act/master/install.sh | bash
-	)
-	act --version &>/dev/null
-fi
-ok "Act is installed (v$(act --version))"
+doing "Installing/Updating Act..."
+"${SCRIPT_DIR}/install-act" /usr/local/bin
+
+doing "Installing/updating the base functions script..."
+"${SCRIPT_DIR}/install-base-scripts"
 
 #
 # Install/Upgrade Kubernetes

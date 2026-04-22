@@ -1,0 +1,92 @@
+#!/bin/bash
+
+set -euo pipefail
+
+timestamp()
+{
+	/usr/bin/date -Ins -u
+}
+
+say()
+{
+	echo -e "$(timestamp): ${@}"
+}
+
+doing()
+{
+	say "👉 ${@}"
+}
+
+ok()
+{
+	say "✅ ${@}"
+}
+
+warn()
+{
+	say "⚠️ ${@}"
+}
+
+err()
+{
+	say "❌ ${@}"
+}
+
+fail()
+{
+	err "${@}"
+	exit ${EXIT_CODE:-1}
+}
+
+cleanup()
+{
+	if [ -n "${CONTAINER:-}" ] ; then
+		doing "Removing the created container (${CONTAINER}) ..."
+		OUT="$(docker container rm --force --volumes "${CONTAINER}" 2>&1)" \
+			&& ok "Cleanup complete!" \
+			|| err "Couldn't remove the container [${CONTAINER}] (rc=${?}): ${OUT}"
+	fi
+}
+
+usage()
+{
+	[ ${#} -ne 0 ] && err "${@}\n"
+	echo -e "usage: ${BASH_ARGV0:-${BASH_SOURCE:-${0}}} [ target-directory ]"
+	exit 1
+}
+
+REG="207428623785.dkr.ecr.us-east-1.amazonaws.com"
+REPO="arkcase/act"
+VER="0.2.87-arm"
+IMAGE="${REG}/${REPO}:${VER}"
+SRC_ACT="act"
+TGT_ACT="${SRC_ACT}"
+
+if [ ${#} -eq 0 ] ; then
+	TGT_DIR="/usr/local/bin"
+elif [ ${#} -eq 1 ] ; then
+	TGT_DIR="${1}"
+else
+	usage
+fi
+
+mkdir -p "${TGT_DIR}" &>/dev/null || true
+[ -e "${TGT_DIR}" ] || fail "The directory [${TGT_DIR}] does not exist and could not be created!"
+[ -d "${TGT_DIR}" ] || fail "The path [${TGT_DIR}] is not a directory"
+[ -w "${TGT_DIR}" ] || fail "The directory [${TGT_DIR}] is not writable"
+
+RC=0
+echo "Creating the container for [${IMAGE}]..."
+CONTAINER="$(docker create "${IMAGE}")" || fail "Failed to create the container (rc=${?}): ${CONTAINER}"
+trap cleanup EXIT
+ok "Container ready with ID ${CONTAINER}!"
+
+TARGET="${TGT_DIR}/${TGT_ACT}"
+doing "Extracting the source executable [${SRC_ACT}] into [${TARGET}] ..."
+CMD=( docker cp "${CONTAINER}:/${SRC_ACT}" "${TARGET}" )
+
+OUT="$( "${CMD[@]}" 2>&1)" || RC=${?}
+[ ${RC} -eq 0 ] || fail "Failed to copy the executable as [${TARGET}] (rc=${RC}): ${OUT}"
+
+ok "Installation complete!"
+exec "${TARGET}" --version
