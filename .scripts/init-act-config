@@ -43,8 +43,8 @@ if [ ! -d "${HOME}" ] ; then
 	exit 0
 fi
 
-[ -v CONFIG_BASE ] || CONFIG_BASE="${HOME}/.config"
-[ -v CONFIG_DIR ] || CONFIG_DIR="${CONFIG_BASE}/act"
+[ -v XDG_CONFIG_HOME ] || XDG_CONFIG_HOME="${HOME}/.config"
+[ -v CONFIG_DIR ] || CONFIG_DIR="${XDG_CONFIG_HOME}/act"
 
 is_installed "${CONFIG_DIR}" && say "✅ ACT configuration is already present - will not overwrite!" && exit 0
 say "ACT Configuration is not installed!"
