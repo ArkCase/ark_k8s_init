@@ -17,13 +17,13 @@ say()
 __cmd_start()
 {
 	say "Starting K8s services and pods..."
-	( set -x ; sudo systemctl start {,cri-}docker.s{ervice,ocket} kubelet.service )
+	( set -x ; sudo systemctl start containerd.service {,cri-}docker.s{ervice,ocket} kubelet.service )
 }
 
 __cmd_stop()
 {
 	say "Stopping K8s services and pods..."
-	( set -x ; sudo systemctl stop kubelet.service {cri-,}docker.s{ocket,ervice} )
+	( set -x ; sudo systemctl stop kubelet.service {cri-,}docker.s{ocket,ervice} containerd.service )
 }
 
 __cmd_cleanup()
