@@ -55,7 +55,7 @@ IMAGE="${REG}/${REPO}:${VER}"
 
 RC=0
 echo "Creating the container for [${IMAGE}]..."
-CONTAINER="$(docker create "${IMAGE}")" || fail "Failed to create the container (rc=${?})"
+CONTAINER="$(docker create --pull always "${IMAGE}")" || fail "Failed to create the container (rc=${?})"
 trap cleanup EXIT
 ok "Container ready with ID ${CONTAINER}!"
 
