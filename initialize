@@ -266,6 +266,10 @@ ok "Helm is installed"
 doing "Installing/updating the base functions script..."
 "${SCRIPT_DIR}/install-base-scripts"
 
+doing "Copying the local tooling scripts..."
+( cd "${BASE_DIR}/tools" && tar -czf - . ) | tar -C /usr/local/bin -xzvf -
+k "Scripts ready!"
+
 #
 # Install GitHub CLI
 #
@@ -331,7 +335,6 @@ if ! kubectl --context "local" get pods -A &>/dev/null ; then
 		doing "Initializing the Kubernetes cluster node..."
 		set -euo pipefail
 		cd "${BASE_DIR}"
-		( cd tools && tar -czf - . ) | tar -C /usr/local/bin -xzvf -
 		[ -v CLUSTER_CIDR ] && echo "	👉 CLUSTER_CIDR=[${CLUSTER_CIDR}]"
 		[ -v SERVICE_CIDR ] && echo "	👉 SERVICE_CIDR=[${SERVICE_CIDR}]"
 		"${SCRIPT_DIR}/init-cluster"
