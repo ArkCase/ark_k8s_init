@@ -268,7 +268,7 @@ doing "Installing/updating the base functions script..."
 
 doing "Copying the local tooling scripts..."
 ( cd "${BASE_DIR}/tools" && tar -czf - . ) | tar -C /usr/local/bin -xzvf -
-k "Scripts ready!"
+ok "Scripts ready!"
 
 #
 # Install GitHub CLI
