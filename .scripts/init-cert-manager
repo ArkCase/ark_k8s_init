@@ -18,7 +18,7 @@ REPO_NAME="jetstack"
 REPO_URL="https://charts.jetstack.io"
 [ -v APP_NS ] || APP_NS="cert-manager"
 
-helm repo list | egrep -q "[[:space:]]${REPO_URL}/?[[:space:]]*$" || helm repo add "${REPO_NAME}" "${REPO_URL}"
+helm repo add --force-update "${REPO_NAME}" "${REPO_URL}"
 
 echo_run helm upgrade --install \
 	--kube-context "local" \

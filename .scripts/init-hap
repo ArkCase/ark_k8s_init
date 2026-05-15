@@ -20,7 +20,8 @@ REPO_URL="https://haproxy-ingress.github.io/charts"
 [ -v HAP_APP_NS ] || HAP_APP_NS="ingress-controller"
 [ -v HAP_VALUES ] || HAP_VALUES="haproxy-ingress-values.yaml"
 
-helm repo list | egrep -q "[[:space:]]https://haproxy-ingress.github.io/charts/?[[:space:]]*$" || helm repo add "${REPO_NAME}" "${REPO_URL}"
+helm repo add --force-update "${REPO_NAME}" "${REPO_URL}"
+
 if [ -f "${HAP_VALUES}" ] ; then
 	HAP_VALUES=(-f "${HAP_VALUES}")
 else
