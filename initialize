@@ -220,12 +220,20 @@ if ! docker ps -a &>/dev/null ; then
 		apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 		[ -v SUDO_USER ] && usermod -a -G docker "${SUDO_USER}"
 	fi
-	ok "Docker is already installed"
-
-	doing "Enabling the Docker service..."
-	systemctl enable --now docker.service docker.socket
-	docker run hello-world
+	ok "Docker is installed"
 fi
+
+doing "Ensuring the Docker services are enabled..."
+SVC=(docker.service docker.socket containerd.service)
+systemctl enable --now "${SVC[@]}" || fail "Failed to enable the docker services: ${SVC[@]}"
+OK="true"
+for S in "${SVC[@]}" ; do
+	systemctl is-active --quiet "${S}" && continue
+	OK="false"
+	warn "The Docker service ${S} was not enabled!"
+done
+"${OK}" || fail "At least one of the Docker services was not properly enabled!"
+docker run hello-world || fail "Failed to run a 'hello, world!' test on Docker"
 ok "Docker is installed and running"
 
 if ! systemctl is-active --quiet cri-docker.service  ; then
@@ -240,12 +248,17 @@ if ! systemctl is-active --quiet cri-docker.service  ; then
 		rm -rf "./cri-dockerd_${CRI_VER}.3-0.ubuntu-${CRI_DISTRO}_amd64.deb" || true
 	fi
 	ok "CRI-Docker is installed"
-
-	doing "Enabling CRI-Docker..."
-	systemctl enable --now cri-docker.service cri-docker.socket
-	# This will verify that it's running
-	systemctl is-active --quiet cri-docker.service
 fi
+doing "Ensuring the CRI-Docker services are enabled..."
+SVC=(cri-docker.service cri-docker.socket)
+systemctl enable --now "${SVC[@]}" || fail "Failed to enable the CRI-Docker services: ${SVC[@]}"
+OK="true"
+for S in "${SVC[@]}" ; do
+	systemctl is-active --quiet "${S}" && continue
+	OK="false"
+	warn "The CRI-Docker service ${S} was not enabled!"
+done
+"${OK}" || fail "At least one of the CRI-Docker services was not properly enabled!"
 ok "CRI-Docker is installed and running"
 
 #
