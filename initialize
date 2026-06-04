@@ -290,6 +290,12 @@ doing "Installing/Updating GH..."
 "${SCRIPT_DIR}/install-gh"
 
 #
+# Install kubectl-view-secret
+#
+doing "Installing/Updating kubectl-view-secret..."
+"${SCRIPT_DIR}/install-view-secret"
+
+#
 # Install act (for container development using GitHub actions)
 #
 doing "Installing/Updating Act..."
