@@ -40,7 +40,7 @@ get_pod_ready_status()
 
 		# Get the list of pods and their ready status ... if the list
 		# is empty, we need to wait and try again ...
-		PODS="$(echo -n "${PODS}" | jq -r '.items[] | "\(.metadata.namespace) \(.metadata.name) \(.status.conditions[] | select(.type == "Ready") .status)"' 2>/dev/null)" || true
+		PODS="$(echo -n "${PODS}" | jq -r '.items[] | "\(.metadata.namespace) \(.metadata.name) \(.status.conditions[] | select((.type == "Ready") and (.reason != "PodCompleted")) .status)"' 2>/dev/null)" || true
 		if [ -z "${PODS}" ] ; then
 			sleep 1 || return 1
 			continue
