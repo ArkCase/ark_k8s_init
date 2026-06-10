@@ -30,6 +30,13 @@ server:
   standalone:
     enabled: "false"
 
+  dataStorage:
+    enabled: true
+    annotations:
+      "hostpath/uid": "100"
+      "hostpath/gid": "1000"
+      "hostpath/perm": "0700"
+
   ha:
     enabled: true
     replicas: 1
