@@ -38,43 +38,48 @@ fail()
 [ -r "${CONF_DIR}" ] || fail "The configuration [${CONF_DIR}] is not readable"
 [ -x "${CONF_DIR}" ] || fail "The configuration [${CONF_DIR}] is not executable"
 
-# For status tracking
-RC=0
-
 #
 # Add Cert-Manager
 #
 doing "Installing Cert-Manager + Trust-Manager"
-OUT="$("${BASEDIR}/init-cert-manager" 2>&1)" || RC=${?}
-[ ${RC} -eq 0 ] || fail "Failed to install Cert-Manager and Trust-Manager: \n${OUT}"
+OUT="$("${BASEDIR}/init-cert-manager" 2>&1)" || \
+	fail "Failed to install Cert-Manager and Trust-Manager (rc=${?}):\n${OUT}"
 
 #
 # Add HAProxy
 #
 doing "Installing HAProxy Ingress"
-OUT="$("${BASEDIR}/init-hap" "${CONF_DIR}/haproxy-ingress-values.yaml" 2>&1)" || RC=${?}
-[ ${RC} -eq 0 ] || fail "Failed to install HAProxy Ingress: \n${OUT}"
+OUT="$("${BASEDIR}/init-hap" "${CONF_DIR}/haproxy-ingress-values.yaml" 2>&1)" || \
+	fail "Failed to install HAProxy Ingress (rc=${?}):\n${OUT}"
 
 #
 # Create the AWS pull secret on the main namespace, as a template
 #
 doing "Creating the aws-arkcase-pull template secret"
-OUT="$(kubectl --context "local" apply -f "${CONF_DIR}/aws-arkcase-pull.yaml" 2>&1)" || RC=${?}
-[ ${RC} -eq 0 ] || fail "Failed to install the aws-arkcase-pull template secret: \n${OUT}"
+OUT="$(kubectl --context "local" apply -f "${CONF_DIR}/aws-arkcase-pull.yaml" 2>&1)" || \
+	fail "Failed to install the aws-arkcase-pull template secret (rc=${?}):\n${OUT}"
 
 #
 # Add the ArkCase helm repository
 #
 doing "Adding the ArkCase Helm Repo"
-OUT="$(helm repo add --force-update arkcase https://arkcase.github.io/ark_helm_charts/ 2>&1)" || RC=${?}
-[ ${RC} -eq 0 ] || fail "Failed to install the ArkCase Helm Repository: \n${OUT}"
+OUT="$(helm repo add --force-update arkcase https://arkcase.github.io/ark_helm_charts/ 2>&1)" || \
+	fail "Failed to install the ArkCase Helm Repository (rc=${?}):\n${OUT}"
 
 #
 # Add the default storage class
 #
 doing "Installing the HostPath provisioner"
-OUT="$(helm --kube-context "local" upgrade --install --create-namespace --namespace hostpath-provisioner hostpath-provisioner arkcase/hostpath-provisioner)" || RC=${?}
-[ ${RC} -eq 0 ] || fail "Failed to install the HostPath provisioner: \n${OUT}"
+OUT="$(helm --kube-context "local" upgrade --install --create-namespace --namespace hostpath-provisioner hostpath-provisioner arkcase/hostpath-provisioner 2>&1)" || \
+	fail "Failed to install the HostPath provisioner (rc=${?}):\n${OUT}"
+
+doing "Installing Vault"
+OUT="$("${BASEDIR}/init-vault" 2>&1)" || \
+	fail "Failed to install Vault (rc=${?}):\n${OUT}"
+
+doing "Installing Vault Secrets Operator"
+OUT="$("${BASEDIR}/init-vault-secrets-operator" 2>&1)" || \
+	fail "Failed to install Vault Secrets Operator (rc=${?}):\n${OUT}"
 
 ok "Support resources deployed"
 exit 0
