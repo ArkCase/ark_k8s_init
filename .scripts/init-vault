@@ -1,0 +1,36 @@
+#!/bin/bash
+SCRIPT="$(readlink -f "${BASH_ARGV0:-${0}}")"
+BASEDIR="$(dirname "${SCRIPT}")"
+SCRIPT="$(basename "${SCRIPT}")"
+
+set -e -o pipefail
+
+echo_run()
+{
+	local ARGS=("${@}")
+	echo "${ARGS[@]@Q}"
+	"${@}"
+}
+
+[ ${#} -ge 1 ] && HAP_VALUES="${1}"
+
+REPO_NAME="hashicorp"
+REPO_URL="https://helm.releases.hashicorp.com"
+[ -v APP_NS ] || APP_NS="vault"
+
+helm repo add --force-update "${REPO_NAME}" "${REPO_URL}"
+
+#
+# Next, deploy vault
+#
+echo_run helm upgrade --install \
+	--kube-context "local" \
+	--create-namespace --namespace "${APP_NS}" \
+	"vault" \
+	"hashicorp/vault" \
+	-f "${BASEDIR}/values/vault.yaml"
+
+#
+# Deploy the auto-unseal scripts
+#
+echo_run kubectl --context "local" --namespace "${APP_NS}" apply -f "${BASEDIR}/resources/vault.yaml"

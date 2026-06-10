@@ -1,0 +1,412 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-unseal-keys
+type: Opaque
+stringData: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-init-scripts
+data:
+  00-init-base-services.sh: |
+    #
+    # Enable the base services we KNOW we'll need
+    # every time
+    #
+    vault secrets enable -path="${MNT_KV}" kv-v2
+    vault auth enable -path "${MNT_K8S}" kubernetes
+    vault write "auth/${MNT_K8S}/config" kubernetes_host="https://${KUBERNETES_PORT_443_TCP_ADDR}"
+    vault auth enable -path "${MNT_USERPASS}" userpass
+
+  01-init-vso.sh: |
+    MNT_TRANSIT="transit"
+
+    NAMESPACE="vault-secrets-operator"
+    SERVICE_ACCOUNT="vault-secrets-operator-controller-manager"
+    POLICY="vso-auth-policy"
+    AUTH_ROLE="vso-auth-role"
+    CACHE="vso-client-cache"
+    TOKEN_AUDIENCE="vault"
+
+    vault secrets enable -path="${MNT_TRANSIT}" transit
+    vault write -force "${MNT_TRANSIT}/keys/${CACHE}"
+    vault policy write "${POLICY}" - <<EOF
+    path "${MNT_TRANSIT}/encrypt/${CACHE}" {
+       capabilities = ["create", "update"]
+    }
+    path "${MNT_TRANSIT}/decrypt/${CACHE}" {
+       capabilities = ["create", "update"]
+    }
+    EOF
+    vault write "auth/${MNT_K8S}/role/${AUTH_ROLE}" \
+       alias_name_source=serviceaccount_name \
+       bound_service_account_names="${SERVICE_ACCOUNT}" \
+       bound_service_account_namespaces="${NAMESPACE}" \
+       token_ttl=0 \
+       token_period=120 \
+       token_policies="${POLICY}" \
+       audience="${TOKEN_AUDIENCE}"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: &name "vault-unseal"
+spec:
+  # Default schedule every 5 minutes
+  # Adjust as desired
+  schedule: "0-59 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  suspend: false
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccount: *name
+          initContainers:
+            - name: init
+              image: public.ecr.aws/arkcase/nettest:latest
+              imagePullPolicy: Always
+              env:
+                - name: SECRET_NAME
+                  value: &secret-keys "vault-unseal-keys"
+                - name: VAULT_SELECTOR
+                  value: "app.kubernetes.io/instance=vault,app.kubernetes.io/name=vault,component=server"
+                - name: INIT_DIR
+                  value: &init-dir "/vault-init.d"
+                - name: POD_LIST
+                  value: &pod-list "$(INIT_DIR)/pods.list"
+              command: [ "/entrypoint" ]
+              volumeMounts:
+                - name: &init-vol "init"
+                  mountPath: *init-dir
+                - name: &unseal-scripts-vol "scripts"
+                  mountPath: "/entrypoint"
+                  subPath: "init-unseal-entrypoint"
+                  readOnly: true
+                - name: *unseal-scripts-vol
+                  mountPath: "/init-unseal-secret"
+                  subPath: "init-unseal-secret"
+                  readOnly: true
+                # - name: *unseal-scripts-vol
+                #   mountPath: "/usr/local/bin/init-k8s-app"
+                #   subPath: "init-k8s-app"
+                #   readOnly: true
+                - name: &init-scripts-vol "init-scripts"
+                  mountPath: "/vault-init.d/scripts"
+                  readOnly: true
+          containers:
+            - name: *name
+              image: hashicorp/vault:1.21.2
+              imagePullPolicy: Always
+              env:
+                - name: VAULT_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      apiVersion: v1
+                      fieldPath: metadata.namespace
+                - name: VAULT_SERVICE
+                  value: "vault-internal"
+                - name: VAULT_PORT
+                  value: "8200"
+                - name: VAULT_ADDRESS_FMT
+                  value: "http://%s.$(VAULT_SERVICE).$(VAULT_NAMESPACE).svc:$(VAULT_PORT)"
+                - name: INIT_DIR
+                  value: *init-dir
+                - name: POD_LIST
+                  value: *pod-list
+                - name: UNSEAL_KEYS_DIR
+                  value: &unseal-dir "/unseal-keys.d"
+              command: [ "/unseal-vault" ]
+              volumeMounts:
+                - name: *init-vol
+                  mountPath: *init-dir
+                - name: &unseal-keys-vol "unseal-keys"
+                  mountPath: *unseal-dir
+                  readOnly: true
+                - name: *unseal-scripts-vol
+                  mountPath: "/unseal-vault"
+                  subPath: "unseal-vault"
+                  readOnly: true
+          volumes:
+            - name: *init-vol
+              emptyDir:
+                sizeLimit: 1Mi
+                medium: Memory
+            - name: *unseal-keys-vol
+              secret:
+                secretName: *secret-keys
+                defaultMode: 0444
+            - name: *unseal-scripts-vol
+              configMap:
+                name: "vault-unseal-scripts"
+                defaultMode: 0755
+            - name: *init-scripts-vol
+              configMap:
+                name: "vault-init-scripts"
+                defaultMode: 0755
+          restartPolicy: OnFailure
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: "vault-unseal"
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: "vault-unseal-init"
+rules:
+  - apiGroups: [ "" ]
+    resources: [ "secrets" ]
+    resourceNames: [ "vault-unseal-keys" ]
+    verbs: [ "*" ]
+  - apiGroups: [ "" ]
+    resources: [ "pods" ]
+    verbs: [ "list" ]
+  - apiGroups: [ "" ]
+    resources: [ "pods" ]
+    resourceNames: [ "vault-0" ]
+    verbs: [ "get", "list" ]
+  - apiGroups: [ "" ]
+    resources: [ "pods/exec" ]
+    resourceNames: [ "vault-0" ]
+    verbs: [ "create" ]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "vault-unseal"
+subjects:
+  - kind: ServiceAccount
+    name: "vault-unseal"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "vault-unseal-init"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-unseal-scripts
+data:
+  init-k8s-app: |
+    #!/bin/sh
+    set -euo pipefail
+
+    if [ ${#} -lt 1 ] ; then
+    	echo -e "usage: ${0} application-name"
+    	exit 1
+    fi
+
+    if [ ${#} -gt 1 ] ; then
+    	echo -e "Cannot initialize more than one local application"
+    	exit 1
+    fi
+
+    APP="${1}"
+    if [ -z "${APP}" ] ; then
+    	echo -e "The application name may not be an empty string"
+    	exit 1
+    fi
+
+    MNT_KV="kv"
+    MNT_K8S="kubernetes"
+    MNT_USERPASS="userpass"
+
+    NAMESPACE="${APP}"
+    SERVICE_ACCOUNT="${APP}-read"
+    AUTH_ROLE="${APP}-read"
+    TOKEN_AUDIENCE="vault"
+    READ_POLICY="${APP}-read"
+    ADMIN_POLICY="${APP}-admin"
+
+    vault policy write "${READ_POLICY}" - <<EOF
+    path "${MNT_KV}/+/${APP}" {
+       capabilities = [ "list", "read" ]
+    }
+    EOF
+
+    vault policy write "${ADMIN_POLICY}" - <<EOF
+    path "${MNT_KV}/metadata" {
+       capabilities = [ "list" ]
+    }
+    path "${MNT_KV}/+/${APP}" {
+       capabilities = [ "list", "read", "create", "update", "patch", "delete" ]
+    }
+    EOF
+
+    # Add the Kubernetes mapping to the service account
+    # that we'll use to create the auto-generated secret
+    vault write "auth/${MNT_K8S}/role/${AUTH_ROLE}" \
+       alias_name_source=serviceaccount_name \
+       bound_service_account_names="${SERVICE_ACCOUNT}" \
+       bound_service_account_namespaces="${NAMESPACE}" \
+       token_ttl=0 \
+       token_period=120 \
+       token_policies="${READ_POLICY}" \
+       audience="${TOKEN_AUDIENCE}"
+
+    # Create the admin user that will be used to populate
+    # the secret
+    vault write "auth/${MNT_USERPASS}/users/${APP}" \
+    	password="${APP}123" \
+    	policies="default,${READ_POLICY},${ADMIN_POLICY}"
+
+    vault kv put "/${MNT_KV}/${APP}" placeholder="ignore-me"
+
+  init-unseal-entrypoint: |
+    #!/bin/bash
+    set -euo pipefail
+    . /.functions
+
+    # See if the unseal secret has already been populated. If not, the vault
+    # instance needs initializing and the secret needs populating from it!
+    say "🔒 Checking if the pod secret needs initializing ..."
+    /init-unseal-secret
+    say "🔓 The unsealing secret is ready!"
+
+    # - Find the vault pods, put them in the file /vault-init.d/vault-pods.txt
+    CMD=(
+    	kubectl
+    		get pods
+    		--no-headers
+    		--output=custom-columns="NAME:.metadata.name"
+    )
+    [ -n "${VAULT_SELECTOR:-}" ] && CMD+=( --selector="${VAULT_SELECTOR}" )
+    eyes "Searching for the Vault pods (selector = [${VAULT_SELECTOR}])..."
+    PODS="$("${CMD[@]}" 2>&1)" || fail "Failed to query the Vault pods (rc=${?}): ${PODS}"
+    echo "${PODS}" | sed -e '/^\s*$/d' | sort -u | tee "${POD_LIST}" || fail "Failed to write the pod listing to [${POD_LIST}] (rc=${?})"
+    quit "Pod listing written out to [${POD_LIST}]!"
+
+  init-unseal-secret: |
+    #!/bin/bash
+    set -euo pipefail
+    . /.functions
+
+    MAIN_POD="vault-0"
+
+    # First things first: is the secret populated?
+    eyes "Examining the secret [${SECRET_NAME}] ..."
+    SECRET="$(kubectl get secret "${SECRET_NAME}" -o json 2>&1)" || fail "Failed to find the secret [${SECRET_NAME}] (rc=${?}: ${SECRET}"
+    KEYS="$(jq -r "(.data // {}) | keys[]" <<< "${SECRET}" 2>&1)" || fail "Failed to get the value keys from the [${SECRET_NAME}] secret (rc=${?}): ${KEYS}"
+
+    # If there are ANY keys in the secret, it means it's populated and we do nothing
+    [ -n "${KEYS}" ] && quit "The [${SECRET_NAME}] secret is already populated, no initialization is necessary!"
+
+    eyes "This is the first time this script runs, so the vault must be initialized!"
+
+    # The secret is empty... DO THE THING!!
+    running "Executing the initial unseal and generating the unseal keys ..."
+    UNSEAL_JSON="$(kubectl exec -i "${MAIN_POD}" -- vault operator init -key-shares=5 -key-threshold=3 -format=json </dev/null 2>&1)" || fail "Failed to run the operator initialization (rc=${?}): ${UNSEAL_JSON}"
+
+    # Create the patching file
+    eyes "Creating the template file for the new contents of the secret [${SECRET_NAME}] ..."
+    FILE="/secret.yaml"
+    cat <<EOF > "${FILE}"
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: "${SECRET_NAME}"
+    type: Opaque
+    stringData:
+    EOF
+
+    NUM=0
+    doing "Adding the unseal keys ..."
+    while read HEX ; do
+    	echo "  unseal-key-$(( ++NUM )): \"${HEX}\""
+    done < <(jq -r '.unseal_keys_hex[]' <<< "${UNSEAL_JSON}") >> "${FILE}"
+    [ ${NUM} -gt 0 ] || fail "NO UNSEAL KEYS FOUND!!!\n${UNSEAL_JSON}"
+    ok "Added ${NUM} unseal keys"
+
+    eyes "Decoding the root token ..."
+    ROOT="$(jq -r '.root_token // ""' <<< "${UNSEAL_JSON}" 2>&1)" || fail "Failed to identify the root token (rc=${?}): ${ROOT}\n\n${UNSEAL_JSON}"
+    echo "  root-token: \"${ROOT}\"" >> "${FILE}"
+    ok "Root token ready!"
+
+    running "Applying the updates to the [${SECRET_NAME}] secret ..."
+    OUT="$(kubectl apply -f "${FILE}" --overwrite=true 2>&1)" || fail "Failed to apply the updates to the [${SECRET_NAME}] secret (rc=${?}): ${OUT}"
+    OUT="$(kubectl patch secret "${SECRET_NAME}" -p '{ "metadata": { "annotations": { "kubectl.kubernetes.io/last-applied-configuration": null } } }' 2>&1)" || warn "Failed to clean up the secret [${SECRET_NAME}] (rc=${?}): ${OUT}"
+    ok "The primary vault has been initialized, and the [${SECRET_NAME}] secret has been initialized with the unsealing keys!"
+
+    running "Unsealing the primary vault..."
+    while read HEX ; do
+    	OUT="$(kubectl exec -i "${MAIN_POD}" -- vault operator unseal "${HEX}" </dev/null 2>&1)" && continue
+    done < <(jq -r '.unseal_keys_hex[]' <<< "${UNSEAL_JSON}")
+    ok "Unsealing complete, verifying results"
+
+    RC=0
+    OUT="$(kubectl exec -i "${MAIN_POD}" -- vault status </dev/null 2>&1)" || RC=${?}
+    case ${RC} in
+    	0 ) ok "\tVault unseal successful." ;;
+    	2 ) fail "\tVault is still sealed." ;;
+    	* ) fail "\tError checking vault status (rc=${RC}):\n${OUT}" ;;
+    esac
+
+    #
+    # Allow for environments to supply their own additional initializations
+    #
+    INIT_SCRIPTS_DIR="${INIT_DIR}/scripts"
+    while read S ; do
+    	if ! is_file_readable "${S}" ; then
+    		err "The script [${S}] is not readable!"
+    		continue
+    	fi
+    	running "Initializing from [${S}] ..."
+    	OUT="$(kubectl exec -it "${MAIN_POD}" -- sh <<-EOF 2>&1
+    	set -euo pipefail
+    	# If it's not already in the environment, set it
+    	[ -n "${VAULT_TOKEN:-}" ] || VAULT_TOKEN="${ROOT}"
+    	export VAULT_TOKEN
+
+    	export MNT_KV="kv"
+    	export MNT_K8S="kubernetes"
+    	export MNT_USERPASS="userpass"
+
+    	# Now do the real work!
+    	$(cat "${S}")
+    	EOF
+    	)" && ok "Script executed!" && continue
+    	err "Failed to initialize from [${S}] (rc=${?}): ${OUT}"
+    done < <(find -L "${INIT_SCRIPTS_DIR}" -mindepth 1 -maxdepth 1 -type f -iname '*.sh' | sort)
+
+    quit "One-time intialization complete!"
+
+  unseal-vault: |
+    #!/bin/sh
+    ERR=""
+    echo "Reading the pod listing from [${POD_LIST}]..."
+    while read POD ; do
+    	[ -n "${VAULT_ADDRESS_FMT}" ] && VAULT_ADDRESS="$(printf "${VAULT_ADDRESS_FMT}" "${POD}")" || VAULT_ADDRESS="${POD}"
+    	RC=0
+    	echo -e "Unsealing ${POD} (address == [${VAULT_ADDRESS}])"
+    	OUT="$(vault status -address="${VAULT_ADDRESS}" 2>&1)" || RC=${?}
+    	case ${RC} in
+    		0 ) echo -e "\tVault is already unsealed." ; continue ;;
+    		2 ) echo -e "\tVault is still sealed." ;;
+    		* ) echo -e "\tError checking vault status (rc=${RC}):\n${OUT}" ; ERR="${ERR} ${POD}" ; continue ;;
+    	esac
+
+    	echo -e "Vault is sealed on ${POD}, proceeding with unseal..."
+    	while read KEY_FILE ; do
+    		KEY="$(cat "${KEY_FILE}")"
+    		OUT="$(vault operator unseal -address="${VAULT_ADDRESS}" "${KEY}" 2>&1)" && continue
+    		echo -e "\tERROR: failed to unseal the vault at ${POD} with the key [${KEY_FILE}] (rc=${?}):\n${OUT}"
+    	done < <(find -L "${UNSEAL_KEYS_DIR}" -mindepth 1 -maxdepth 1 -type f -name "unseal-key-*" | sort)
+
+    	RC=0
+    	OUT="$(vault status -address="${VAULT_ADDRESS}" 2>&1)" || RC=${?}
+    	case ${RC} in
+    		0 ) echo -e "\tVault unseal successful." ;;
+    		2 ) echo -e "\tVault is still sealed." ; ERR="${ERR} ${POD}" ;;
+    		* ) echo -e "\tError checking vault status (rc=${RC}):\n${OUT}" ; ERR="${ERR} ${POD}" ; continue ;;
+    	esac
+    done < "${POD_LIST}"
+    [ -z "${ERR}" ] || { echo -e "Could not unseal the following pods: [${ERR}]" ; exit 1 ; }
+    echo -e "Vault unseal is complete!"
+    exit 0

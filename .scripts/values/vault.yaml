@@ -1,0 +1,63 @@
+# https://github.com/hashicorp/vault-helm/blob/main/values.yaml
+global:
+  tlsDisable: true
+
+ui:
+  enabled: true
+
+csi:
+  enabled: true
+
+server:
+  # Configure the Update Strategy Type for the StatefulSet
+  # See https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#update-strategies
+  updateStrategyType: "RollingUpdate"
+
+  # Supported log levels include: trace, debug, info, warn, error
+  logLevel: info
+
+  # Supported log formats include: standard, json
+  logFormat: standard
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 256Mi
+      cpu: 250m
+
+  standalone:
+    enabled: "false"
+
+  ha:
+    enabled: true
+    replicas: 1
+    raft:
+      enabled: true
+      setNodeId: false
+      config: |
+        ui = true
+
+        listener "tcp" {
+          tls_disable = 1
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+          # Enable unauthenticated metrics access (necessary for Prometheus Operator)
+          # telemetry {
+          #   unauthenticated_metrics_access = "true"
+          # }
+        }
+
+        storage "raft" {
+          path = "/vault/data"
+          retry_join {
+            # https://github.com/hashicorp/go-discover
+            # https://github.com/hashicorp/go-discover/blob/master/provider/k8s/k8s_discover.go#L38-L60
+            auto_join        = "provider=k8s namespace=vault label_selector=\"app.kubernetes.io/instance=vault,app.kubernetes.io/name=vault,component=server\""
+            auto_join_scheme = "http"
+          }
+        }
+
+        service_registration "kubernetes" {
+        }
