@@ -92,16 +92,12 @@ spec:
                   mountPath: "/init-unseal-secret"
                   subPath: "init-unseal-secret"
                   readOnly: true
-                # - name: *unseal-scripts-vol
-                #   mountPath: "/usr/local/bin/init-k8s-app"
-                #   subPath: "init-k8s-app"
-                #   readOnly: true
                 - name: &init-scripts-vol "init-scripts"
                   mountPath: "/vault-init.d/scripts"
                   readOnly: true
           containers:
             - name: *name
-              image: hashicorp/vault:1.21.2
+              image: public.ecr.aws/arkcase/vault:latest
               imagePullPolicy: Always
               env:
                 - name: VAULT_NAMESPACE
@@ -195,7 +191,7 @@ metadata:
   name: vault-unseal-scripts
 data:
   init-k8s-app: |
-    #!/bin/sh
+    #!/usr/bin/bash
     set -euo pipefail
 
     if [ ${#} -lt 1 ] ; then
@@ -260,7 +256,7 @@ data:
     vault kv put "/${MNT_KV}/${APP}" placeholder="ignore-me"
 
   init-unseal-entrypoint: |
-    #!/bin/bash
+    #!/usr/bin/bash
     set -euo pipefail
     . /.functions
 
@@ -378,7 +374,7 @@ data:
     quit "One-time intialization complete!"
 
   unseal-vault: |
-    #!/bin/sh
+    #!/bin/bash
     ERR=""
     echo "Reading the pod listing from [${POD_LIST}]..."
     while read POD ; do
