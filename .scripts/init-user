@@ -81,5 +81,9 @@ doing "Installing Vault Secrets Operator"
 OUT="$("${BASEDIR}/init-vault-secrets-operator" 2>&1)" || \
 	fail "Failed to install Vault Secrets Operator (rc=${?}):\n${OUT}"
 
+doing "Installing Keda"
+OUT="$("${BASEDIR}/init-keda" 2>&1)" || \
+	fail "Failed to install Keda (rc=${?}):\n${OUT}"
+
 ok "Support resources deployed"
 exit 0

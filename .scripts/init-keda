@@ -1,0 +1,33 @@
+#!/bin/bash
+SCRIPT="$(readlink -f "${BASH_ARGV0:-${0}}")"
+BASEDIR="$(dirname "${SCRIPT}")"
+SCRIPT="$(basename "${SCRIPT}")"
+
+set -e -o pipefail
+
+echo_run()
+{
+	local ARGS=("${@}")
+	echo "${ARGS[@]@Q}"
+	"${@}"
+}
+
+[ ${#} -ge 1 ] && HAP_VALUES="${1}"
+
+REPO_NAME="kedacore"
+REPO_URL="https://kedacore.github.io/charts"
+[ -v APP_NS ] || APP_NS="keda"
+
+APP="keda"
+CHART="kedacore/${APP}"
+
+helm repo add --force-update "${REPO_NAME}" "${REPO_URL}"
+
+#
+# Next, deploy Keda
+#
+echo_run helm upgrade --install \
+	--kube-context "local" \
+	--create-namespace --namespace "${APP_NS}" \
+	"${APP}" \
+	"${CHART}"
