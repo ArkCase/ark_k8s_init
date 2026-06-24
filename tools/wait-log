@@ -7,6 +7,8 @@
 
 set -euo pipefail
 
+CALLED="${BASH_ARGV0:-${BASH_SOURCE:-${0}}}"
+
 timestamp()
 {
 	date -Ins -u
@@ -17,37 +19,123 @@ say()
 	echo -e "$(timestamp): ${@}"
 }
 
+err()
+{
+	say "❌ ${@}"
+}
+
 fail()
 {
-	say "${@}" 1>&2
+	err "${@}"
 	exit ${EXIT_CODE:-1}
 }
 
 usage()
 {
-	echo -e "usage: ${BASH_SOURCE:-${0}} pod [container]" 1>&2
+	[ ${#} -eq 0 ] || err "${@}\n"
+	echo -e "usage: ${CALLED} [ -h | -? | --help ] [ -d | --debug ] [ --context context ] [ -n namespace | --namespace namespace ] [ -t timeout | --timeout timeout ] pod [ container ]" 1>&2
 	exit 1
 }
 
-[ ${#} -ge 1 ] || usage
-[ ${#} -le 2 ] || usage
+ARGS="$(getopt -o "h?dn:t:" -l "help,debug,context:,namespace:,timeout:" -n "${CALLED}" -- "${@}")" || usage
+
+CONTEXT_SET="false"
+CONTEXT=""
+NAMESPACE_SET="false"
+NAMESPACE=""
+TIMEOUT_SET="false"
+TIMEOUT="1h"
+DEBUG="false"
+
+eval set -- "${ARGS}"
+
+while true ; do
+	case "${1}" in
+		--help | -h | "-?" ) usage ;;
+
+		-- ) shift ; break ;;
+
+		--debug | -d ) DEBUG="true" ; shift ;;
+
+		--context )
+			[ "${CONTEXT_SET}" == "false" ] || usage "You may only provide ${1} once"
+			CONTEXT_SET="true"
+			CONTEXT="${2}"
+			[ -n "${CONTEXT}" ] || fail "The context may not be the empty string"
+			shift 2
+			;;
+
+		--namespace | -n )
+			[ "${NAMESPACE_SET}" == "false" ] || usage "You may only provide ${1} once"
+			NAMESPACE_SET="true"
+			NAMESPACE="${2}"
+			[ -n "${NAMESPACE}" ] || fail "The namespace may not be the empty string"
+			shift 2
+			;;
+
+		--timeout | -t )
+			[ "${TIMEOUT_SET}" == "false" ] || usage "You may only provide ${1} once"
+			TIMEOUT_SET="true"
+			TIMEOUT="${2}"
+			[ -n "${TIMEOUT}" ] || fail "The timeout may not be the empty string"
+			shift 2
+			;;
+	esac
+done
+
+[ ${#} -ge 1 ] || usage "Must provide the pod's name to wait for"
+[ ${#} -le 2 ] || usage "Too many positional parameters (expected at most 2!)"
 
 POD="${1}"
-shift
+[ -n "${POD}" ] || fail "The pod's name may not be the empty string"
 
 CONTAINER=""
-if [ ${#} -gt 0 ] ; then
-	CONTAINER="${1}"
-	shift
+if [ ${#} -gt 1 ] ; then
+	CONTAINER="${2}"
+	[ -n "${CONTAINER}" ] || fail "The container's name may not be the empty string"
 fi
 
-wait-pod "${POD}" || fail "Pod ${POD} did not come up on time"
+export K="$(type -P kubectl 2>&1)" || fail "Couldn't find kubectl in the path (rc=${?}): ${K}"
+export K_ARGS=()
+__k()
+{
+	"${K}" "${K_ARGS[@]}" "${@}"
+}
+
+__k_exec()
+{
+	exec "${K}" "${K_ARGS[@]}" "${@}"
+}
+
+CTX_ERR=""
+if [ -n "${CONTEXT}" ] ; then
+	OUT="$(__k config get-contexts "${CONTEXT}" 2>&1)" || fail "Couldn't validate the context [${CONTEXT}]"
+	K_ARGS+=( --context "${CONTEXT}" )
+	CTX_ERR=" for the context [${CONTEXT}]"
+fi
+
+NS_ERR=""
+if [ -n "${NAMESPACE}" ] ; then
+	OUT="$(__k get namespace "${NAMESPACE}" 2>&1)" || fail "Couldn't validate the namespace [${NAMESPACE}]${CTX_ERR}"
+	K_ARGS+=( --namespace "${NAMESPACE}" )
+	NS_ERR=" in the ${NAMESPACE} namespace"
+fi
+
+# We're going to pass these along to the wait-pod script, but without the trailing
+# container
+eval set -- "${ARGS}"
+
+ARR=( "${@}" )
+[ -n "${CONTAINER}" ] && unset 'ARR[-1]'
+
+wait-pod "${ARR[@]}" || exit ${?}
 
 if [ -n "${CONTAINER}" ] ; then
-	CONTAINER=(-c "${CONTAINER}")
+	CONTAINER=( -c "${CONTAINER}" )
 else
 	CONTAINER=()
 fi
 
-set -x
-exec kubectl logs -f "${CONTAINER[@]}" "${POD}"
+CMD=( __k_exec "${K_ARGS[@]}" logs -f "${CONTAINER[@]}" "${POD}" )
+${DEBUG} && set -x
+"${CMD[@]}"

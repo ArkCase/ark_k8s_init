@@ -5,7 +5,7 @@
 #
 set -eou pipefail
 
-CALLED="${BASH_SOURCE:-${0}}"
+CALLED="${BASH_ARGV0:-${BASH_SOURCE:-${0}}}"
 
 timestamp()
 {
@@ -17,45 +17,101 @@ say()
 	echo -e "$(timestamp): ${@}"
 }
 
+err()
+{
+	say "❌ ${@}"
+}
+
 fail()
 {
-	say "${@}" 1>&2
+	err "${@}"
 	exit ${EXIT_CODE:-1}
 }
 
 usage()
 {
-	echo -e "usage: ${BASH_SOURCE:-${CALLED}} [-d] [-t timeout] [-n namespace] [-h | -?] pod" 1>&2
+	[ ${#} -eq 0 ] || err "${@}\n"
+	echo -e "usage: ${CALLED} [ -h | -? | --help ] [ -d | --debug ] [ --context context ] [ -n namespace | --namespace namespace ] [ -t timeout | --timeout timeout ] pod" 1>&2
 	exit 1
 }
 
-# Default timeout is 1 hour
+ARGS="$(getopt -o "h?dn:t:" -l "help,debug,context:,namespace:,timeout:" -n "${CALLED}" -- "${@}")" || usage
+
+CONTEXT_SET="false"
+CONTEXT=""
+NAMESPACE_SET="false"
+NAMESPACE=""
+TIMEOUT_SET="false"
 TIMEOUT="1h"
-TIMEOUT_GIVEN="false"
-NAMESPACE="default"
-NAMESPACE_GIVEN="false"
 DEBUG="false"
-while getopts ":t:n:hd" OPT "${@}" ; do
-	case "${OPT}" in
-		t ) [ -z "${OPTARG}" ] && fail "May not specify an empty timeout value"
-			${TIMEOUT_GIVEN} && fail "May not give more than one timeout value"
-			TIMEOUT="${OPTARG}"
-			TIMEOUT_GIVEN="true"
+
+eval set -- "${ARGS}"
+
+while true ; do
+	case "${1}" in
+		--help | -h | "-?" ) usage ;;
+
+		-- ) shift ; break ;;
+
+		--debug | -d ) DEBUG="true" ; shift ;;
+
+		--context )
+			[ "${CONTEXT_SET}" == "false" ] || usage "You may only provide ${1} once"
+			CONTEXT_SET="true"
+			CONTEXT="${2}"
+			[ -n "${CONTEXT}" ] || fail "The context may not be the empty string"
+			shift 2
 			;;
-		n ) [ -z "${OPTARG}" ] && fail "May not specify an empty namespace"
-			${NAMESPACE_GIVEN} && fail "May not give more than one namespace value"
-			NAMESPACE="${OPTARG}"
-			NAMESPACE_GIVEN="true"
+
+		--namespace | -n )
+			[ "${NAMESPACE_SET}" == "false" ] || usage "You may only provide ${1} once"
+			NAMESPACE_SET="true"
+			NAMESPACE="${2}"
+			[ -n "${NAMESPACE}" ] || fail "The namespace may not be the empty string"
+			shift 2
 			;;
-		d ) DEBUG="true" ;;
-		: ) fail "Option -${OPTARG} requires an argument" ;;
-		h | \? ) usage ;;
+
+		--timeout | -t )
+			[ "${TIMEOUT_SET}" == "false" ] || usage "You may only provide ${1} once"
+			TIMEOUT_SET="true"
+			TIMEOUT="${2}"
+			[ -n "${TIMEOUT}" ] || fail "The timeout may not be the empty string"
+			shift 2
+			;;
 	esac
 done
-shift $(( ${OPTIND} - 1 ))
 
-[ ${#} -lt 1 ] && usage
+[ ${#} -eq 1 ] || usage "Must provide the pod's name to wait for"
 POD="${1}"
+[ -n "${POD}" ] || fail "The pod's name may not be the empty string"
 
+export K="$(type -P kubectl 2>&1)" || fail "Couldn't find kubectl in the path (rc=${?}): ${K}"
+export K_ARGS=()
+__k()
+{
+	"${K}" "${K_ARGS[@]}" "${@}"
+}
+
+__k_exec()
+{
+	exec "${K}" "${K_ARGS[@]}" "${@}"
+}
+
+CTX_ERR=""
+if [ -n "${CONTEXT}" ] ; then
+	OUT="$(__k config get-contexts "${CONTEXT}" 2>&1)" || fail "Couldn't validate the context [${CONTEXT}]"
+	K_ARGS+=( --context "${CONTEXT}" )
+	CTX_ERR=" for the context [${CONTEXT}]"
+fi
+
+NS_ERR=""
+if [ -n "${NAMESPACE}" ] ; then
+	OUT="$(__k get namespace "${NAMESPACE}" 2>&1)" || fail "Couldn't validate the namespace [${NAMESPACE}]${CTX_ERR}"
+	K_ARGS+=( --namespace "${NAMESPACE}" )
+	NS_ERR=" in the ${NAMESPACE} namespace"
+fi
+
+
+CMD=( __k_exec wait --timeout "${TIMEOUT}" --for=jsonpath="{.status.phase}=Running" "pod/${POD}" )
 ${DEBUG} && set -x
-exec kubectl wait --timeout="${TIMEOUT}" --for=jsonpath="{.status.phase}=Running" --namespace "${NAMESPACE}" "pod/${POD}"
+"${CMD[@]}"

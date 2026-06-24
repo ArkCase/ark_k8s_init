@@ -40,6 +40,7 @@ fail()
 
 cleanup()
 {
+	[ -n "${CID:-}" ] && rm -rf "${CID}" &>/dev/null
 	if [ -n "${CONTAINER:-}" ] ; then
 		doing "Removing the created container (${CONTAINER}) ..."
 		OUT="$(docker container rm --force --volumes "${CONTAINER}" 2>&1)" \
@@ -48,32 +49,32 @@ cleanup()
 	fi
 }
 
+if [ "$(/usr/bin/id -u)" != "0" ] ; then
+	say "⚠️ Not running as root, must escalate privileges!"
+	exec sudo -EH "PATH=${PATH}" "${0}" "${@}"
+fi
+
 REG="public.ecr.aws"
-REPO="arkcase/base"
+REPO="arkcase/base-container-scripts"
 VER="latest"
 IMAGE="${REG}/${REPO}:${VER}"
 
-RC=0
-echo "Creating the container for [${IMAGE}]..."
-CONTAINER="$(docker create --pull always "${IMAGE}")" || fail "Failed to create the container (rc=${?})"
 trap cleanup EXIT
+
+echo "Creating the container for [${IMAGE}]..."
+CID="$(mktemp --tmpdir=/tmp .container-id.XXXXXX 2>&1)" || fail "Failed to create a temporary file (rc=${?}): ${CID}"
+rm -f "${CID}" &>/dev/null || true
+CONTAINER="$(docker create --pull always --cidfile "${CID}" --entrypoint /dev/null "${IMAGE}" 2>&1)" || fail "Failed to create the container (rc=${?}): ${CONTAINER}"
+CONTAINER="$(<"${CID}")" || fail "Failed to read the Container ID from [${CID}]"
 ok "Container ready with ID ${CONTAINER}!"
 
-SCRIPTS=(
-	/.functions
-	/usr/local/bin/decrypt
-	/usr/local/bin/encrypt
-	/usr/local/bin/find-ssl-dirs
-	/usr/local/bin/fips-enabled
-	/usr/local/bin/json2yaml
-	/usr/local/bin/mvn-crypt
-	/usr/local/bin/mvn-get
-	/usr/local/bin/xmlenvsubst
-	/usr/local/bin/yaml2json
+doing "Copying the common-use scripts ..."
+SRC_ITEMS=(
+	.functions
+	usr/local/bin/
 )
-
-doing "Copying the scripts..."
-for SCRIPT in "${SCRIPTS[@]}" ; do
-	docker cp "${CONTAINER}:${SCRIPT}" "${SCRIPT}" || fail "Failed to copy [${SCRIPT}] (rc=${?})"
+for SRC in "${SRC_ITEMS[@]}" ; do
+	doing "Installing [${SRC}] ..."
+	OUT="$( docker cp "${CONTAINER}:/${SRC}" "/${SRC}" )" || fail "Failed to copy [${SRC}] (rc=${?}): ${OUT}"
+	ok "Installed!"
 done
-ok "Scripts copied!"

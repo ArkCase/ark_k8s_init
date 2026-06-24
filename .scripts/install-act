@@ -40,6 +40,7 @@ fail()
 
 cleanup()
 {
+	[ -n "${CID:-}" ] && rm -rf "${CID}" &>/dev/null
 	if [ -n "${CONTAINER:-}" ] ; then
 		doing "Removing the created container (${CONTAINER}) ..."
 		OUT="$(docker container rm --force --volumes "${CONTAINER}" 2>&1)" \
@@ -70,23 +71,30 @@ else
 	usage
 fi
 
+if [ "$(/usr/bin/id -u)" != "0" ] ; then
+	say "⚠️ Not running as root, must escalate privileges!"
+	exec sudo -EH "PATH=${PATH}" "${0}" "${@}"
+fi
+
 mkdir -p "${TGT_DIR}" &>/dev/null || true
 [ -e "${TGT_DIR}" ] || fail "The directory [${TGT_DIR}] does not exist and could not be created!"
 [ -d "${TGT_DIR}" ] || fail "The path [${TGT_DIR}] is not a directory"
 [ -w "${TGT_DIR}" ] || fail "The directory [${TGT_DIR}] is not writable"
 
-RC=0
-echo "Creating the container for [${IMAGE}]..."
-CONTAINER="$(docker create "${IMAGE}")" || fail "Failed to create the container (rc=${?}): ${CONTAINER}"
 trap cleanup EXIT
+
+echo "Creating the container for [${IMAGE}]..."
+CID="$(mktemp --tmpdir=/tmp .container-id.XXXXXX 2>&1)" || fail "Failed to create a temporary file (rc=${?}): ${CID}"
+rm -f "${CID}" &>/dev/null || true
+CONTAINER="$(docker create --pull always --cidfile "${CID}" --entrypoint /dev/null "${IMAGE}" 2>&1)" || fail "Failed to create the container (rc=${?}): ${CONTAINER}"
+CONTAINER="$(<"${CID}")" || fail "Failed to read the Container ID from [${CID}]"
 ok "Container ready with ID ${CONTAINER}!"
 
 TARGET="${TGT_DIR}/${TGT_ACT}"
 doing "Extracting the source executable [${SRC_ACT}] into [${TARGET}] ..."
 CMD=( docker cp "${CONTAINER}:/${SRC_ACT}" "${TARGET}" )
 
-OUT="$( "${CMD[@]}" 2>&1)" || RC=${?}
-[ ${RC} -eq 0 ] || fail "Failed to copy the executable as [${TARGET}] (rc=${RC}): ${OUT}"
+OUT="$( "${CMD[@]}" 2>&1)" || fail "Failed to copy the executable as [${TARGET}] (rc=${?}): ${OUT}"
 
 ok "Installation complete!"
 exec "${TARGET}" --version
