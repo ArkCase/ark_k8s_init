@@ -189,6 +189,8 @@ echo "${KUBEADM_CONFIG}" > "${KUBEADM_CONFIG_FILE}"
 
 # Ensure we have br_netfilter
 modprobe br_netfilter || fail "Failed to install the netfilter bridging module"
+
+# Turn off IPv6
 K8S_SYSCTL="/etc/sysctl.d/99-kubernetes.conf"
 cat <<EOF > "${K8S_SYSCTL}"
 net.bridge.bridge-nf-call-ip6tables = 1
@@ -196,6 +198,18 @@ net.bridge.bridge-nf-call-iptables = 1
 net.ipv4.ip_forward = 1
 EOF
 echo_run sysctl -p "${K8S_SYSCTL}" || fail "Failed to enable network bridging"
+
+# Add more watches
+K8S_SYSCTL="/etc/sysctl.d/98-more-watches.conf"
+cat <<EOF > "${K8S_SYSCTL}"
+###################################################################
+# Enable more user watches
+###################################################################
+fs.inotify.max_user_watches = 2147483647
+fs.inotify.max_user_instances = 2147483647
+fs.inotify.max_queued_events = 2147483647
+EOF
+echo_run sysctl -p "${K8S_SYSCTL}" || fail "Failed to enable extra file watches"
 
 # Next, init the cluster
 echo_run kubeadm init \
