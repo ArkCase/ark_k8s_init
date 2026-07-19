@@ -52,7 +52,15 @@ if [ -f "${AWS_CONFIG}" ] ; then
 		"${AWS_CONFIG}"
 else
 	say "👉 Creating your AWS configuration for user ${CURRENT_USER}..."
-	mkdir -p "$(dirname "${AWS_CONFIG}")"
+	AWS_DIR="$(dirname "${AWS_CONFIG}")"
+	# NOTE: handle a dangling symlink at the config dir. uutils 'mkdir -p'
+	# (Ubuntu's default coreutils since 25.10) fails with "mkdir: Already
+	# exists" on a symlink whose target is missing, where GNU mkdir would not.
+	if [ -L "${AWS_DIR}" ] && [ ! -e "${AWS_DIR}" ] ; then
+		mkdir -p "$(readlink -m "${AWS_DIR}")" || fail "Could not create the AWS config dir target for the dangling symlink [${AWS_DIR}]"
+	elif [ ! -d "${AWS_DIR}" ] ; then
+		mkdir -p "${AWS_DIR}" || fail "Could not create the AWS config dir [${AWS_DIR}]"
+	fi
 	cat <<-EOF > "${AWS_CONFIG}"
 	[default]
 	region=us-east-1
