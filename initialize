@@ -335,16 +335,59 @@ else
 	KUBEADM_VER="0"
 fi
 
-if [ ${KUBEADM_VER//./0} -lt ${K8S_VER//./0} ] ; then
-	[ -n "${KUBEADM_VER}" ] && say "Existing Kubernetes version ${KUBEADM_VER}"
-	doing "Installing/Upgrading Kubernetes v${K8S_VER}..."
-	rm -f "${TRUSTED_GPG_DIR}/kubernetes.gpg" &>/dev/null || true
-	curl -fsSL "https://pkgs.k8s.io/core:/stable:/v${K8S_VER}/deb/Release.key" | gpg --dearmor -o "${TRUSTED_GPG_DIR}/kubernetes.gpg"
-	echo "deb https://pkgs.k8s.io/core:/stable:/v${K8S_VER}/deb/ /" > "${APT_SOURCES_DIR}/kubernetes.list"
-	apt-get update
-	apt-get install -y kubelet kubeadm kubectl
+[ -n "${KUBEADM_VER}" ] && [ "${KUBEADM_VER}" != "0" ] && say "Existing Kubernetes version ${KUBEADM_VER}"
+
+#
+# Ensure the upstream Kubernetes apt repo is configured, along with a pin that
+# keeps it ahead of any vendor repo (e.g. packages.microsoft.com's Ubuntu prod
+# repo) that also ships kubelet/kubectl -- often at a NEWER version than the
+# pinned control-plane minor. At equal apt priority, apt installs the highest
+# version, which silently drags kubelet ahead of kubeadm and trips kubeadm's
+# preflight version-skew check ("kubelet version is higher than the control
+# plane version"). The pin (priority > 1000) forces all three tools to come
+# from pkgs.k8s.io regardless of what a vendor repo offers.
+#
+doing "Configuring the Kubernetes apt repository and version pin (v${K8S_VER})..."
+rm -f "${TRUSTED_GPG_DIR}/kubernetes.gpg" &>/dev/null || true
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/v${K8S_VER}/deb/Release.key" | gpg --dearmor -o "${TRUSTED_GPG_DIR}/kubernetes.gpg"
+echo "deb https://pkgs.k8s.io/core:/stable:/v${K8S_VER}/deb/ /" > "${APT_SOURCES_DIR}/kubernetes.list"
+cat > /etc/apt/preferences.d/99-kubernetes <<-EOF
+	# Keep kubelet/kubeadm/kubectl on the upstream pkgs.k8s.io repo (v${K8S_VER}),
+	# ahead of any vendor repo that ships a newer, skew-incompatible kubelet.
+	Package: kubelet kubeadm kubectl kubernetes-cni cri-tools
+	Pin: origin "pkgs.k8s.io"
+	Pin-Priority: 1001
+	EOF
+apt-get update
+
+#
+# (Re)install the three tools together at the pinned minor so kubelet can never
+# end up ahead of kubeadm/the control plane. Trigger this whenever any of them
+# is missing or is NOT on the pinned minor -- keyed on all three, not just
+# kubeadm, so a vendor-pushed kubelet/kubectl gets corrected too. The temporary
+# unhold + --allow-downgrades repairs a machine where a vendor repo already
+# installed a newer kubelet/kubectl before this pin was in place.
+#
+NEED_INSTALL="false"
+for PKG in kubelet kubeadm kubectl ; do
+	CUR="$(dpkg-query -W -f='${Version}' "${PKG}" 2>/dev/null || true)"
+	case "${CUR}" in
+		"${K8S_VER}".* ) ;;
+		* ) NEED_INSTALL="true" ;;
+	esac
+done
+if "${NEED_INSTALL}" ; then
+	doing "Installing/aligning Kubernetes v${K8S_VER} (kubelet, kubeadm, kubectl)..."
+	apt-mark unhold kubelet kubeadm kubectl &>/dev/null || true
+	apt-get install -y --allow-downgrades kubelet kubeadm kubectl
 fi
-ok "Kubernetes v${K8S_VER} is installed"
+
+#
+# Hold the trio so a later 'apt-get dist-upgrade' (run at the top of this
+# script) can't drag kubelet/kubectl ahead of kubeadm again.
+#
+apt-mark hold kubelet kubeadm kubectl &>/dev/null || true
+ok "Kubernetes v${K8S_VER} is installed and pinned"
 
 #
 # Initialize the K8s node
