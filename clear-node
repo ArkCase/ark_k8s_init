@@ -24,7 +24,11 @@ echo_run()
 
 # Clean house
 echo_run kubeadm reset -f "${CRI[@]}"
-[ -d /etc/cni/net.d ] && rm -rf /etc/cni/net.d
+# NOTE: Empty the CNI conf dir but DO NOT remove the directory itself.
+# containerd 2.x watches /etc/cni/net.d and crashes fatally if the watched
+# directory is deleted ("cni conf dir is removed, stop watching"), which races
+# with the subsequent 'kubeadm init' image pulls and makes them fail.
+[ -d /etc/cni/net.d ] && find /etc/cni/net.d -mindepth 1 -delete
 if [ -f "${HOME}/.kube/config" ] ; then
 	for n in context cluster user ; do
 		kubectl config delete-$n local || true
