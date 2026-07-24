@@ -19,6 +19,6 @@ METRICS_URL="https://github.com/kubernetes-sigs/metrics-server/releases/${METRIC
 METRICS_FILE="components.yaml"
 
 echo "Downloading the metrics version file..."
-YAML="$(curl --max-time 90 --retry -fsSL "${METRICS_URL}")" || { echo "Failed to download the metrics yaml" ; exit 1 ; }
+YAML="$(curl --max-time 90 --retry 3 -fsSL "${METRICS_URL}")" || { echo "Failed to download the metrics yaml" ; exit 1 ; }
 echo "Creating the metrics resources"
 echo_run kubectl --context "local" apply -f - < <(echo "${YAML}" | sed '/--metric-resolution=/a \ \ \ \ \ \ \ \ - --kubelet-insecure-tls')
