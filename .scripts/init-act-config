@@ -56,7 +56,14 @@ CONF="${BASEDIR}/act-config.bin"
 
 say "🔑 Decrypting the Act configuration..."
 CONF_TAR="$(mktemp)"
-openssl aes-256-cbc -a -A -d -salt -iter 1000 -in "${CONF}" -out "${CONF_TAR}" || fail "Failed to decrypt the Act configuration"
+# A missing/incorrect AES password is not fatal: the bundled Act config is an
+# ArkCase-internal convenience. Skip it gracefully (mirrors init-aws-config) so
+# the rest of the installation (create-arkcase-ca, wait-for-pods) can complete.
+if ! openssl aes-256-cbc -a -A -d -salt -iter 1000 -in "${CONF}" -out "${CONF_TAR}" ; then
+	err "Could not decrypt the Act configuration (no/incorrect password) - skipping. Configure Act manually later if you need it."
+	rm -f "${CONF_TAR}"
+	exit 0
+fi
 tar -C "${CONFIG_DIR}" -xzvf "${CONF_TAR}" || fail "Failed to extract the Act configuration"
 ACTRC="${CONFIG_DIR}/actrc"
 if [ -f "${ACTRC}" ] ; then
