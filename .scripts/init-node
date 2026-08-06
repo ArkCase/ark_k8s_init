@@ -50,6 +50,14 @@ done
 [ -v CLUSTER_CIDR ] || CLUSTER_CIDR="10.96.0.0/12"
 [ -v SERVICE_CIDR ] || SERVICE_CIDR="${CLUSTER_CIDR}"
 
+# Pin the control-plane version to the installed kubeadm's exact version.
+# Without this, kubeadm queries the internet for "stable", and if that release
+# is far newer than the client it falls back to an arbitrary minor -- which can
+# leave the control plane behind the installed kubelet and fail preflight. The
+# apt pin in 'initialize' keeps kubelet on this same version, so control plane
+# and kubelet stay matched and 'kubeadm init' works offline.
+KUBERNETES_VERSION="$(kubeadm version -o short 2>/dev/null)" || KUBERNETES_VERSION=""
+
 LOCAL_ONLY_NAME="K8s-Local"
 LOCAL_ONLY_ENDPOINT="k8s.cluster.prv"
 LOCAL_ONLY_IFACE="kubelocal0"
@@ -131,6 +139,25 @@ if [ "${CONTROL_PLANE_ENDPOINT}" == "${LOCAL_ONLY_ENDPOINT}" ] ; then
 	EOF
 fi
 
+# Pin kubelet's node IP to the stable virtual interface so the node's
+# InternalIP never tracks a DHCP/Wi-Fi address. On a single-node laptop
+# cluster that roams between networks, an autodetected node IP silently
+# breaks host-networked infra: Calico's Typha pod re-advertises the old
+# host IP, Felix can no longer reach it, the dataplane stops being
+# programmed, and newly-created pods black-hole (while kubectl keeps
+# working via the pinned control-plane endpoint). Binding to
+# ${LOCAL_ONLY_ADDX} (the always-up ${LOCAL_ONLY_IFACE} dummy) makes an IP
+# change a non-event. Calico's own autodetection is pinned to the same
+# interface in init-calico.
+if [ "${CONTROL_PLANE_ENDPOINT}" == "${LOCAL_ONLY_ENDPOINT}" ] ; then
+	KUBELET_DEFAULTS="/etc/default/kubelet"
+	DESIRED_ARGS="KUBELET_EXTRA_ARGS=\"--node-ip=${LOCAL_ONLY_ADDX}\""
+	if [ "$(cat "${KUBELET_DEFAULTS}" 2>/dev/null)" != "${DESIRED_ARGS}" ] ; then
+		say "👉 Pinning kubelet's node IP to the stable address [${LOCAL_ONLY_ADDX}]..."
+		echo "${DESIRED_ARGS}" > "${KUBELET_DEFAULTS}"
+	fi
+fi
+
 echo_run systemctl stop kubelet || true
 echo_run systemctl start kubelet || fail "Failed to start kubelet"
 
@@ -158,6 +185,7 @@ read -r -d '' VAR <<-EOF || true
 	---
 	apiVersion: kubeadm.k8s.io/v1beta3
 	kind: ClusterConfiguration
+	${KUBERNETES_VERSION:+kubernetesVersion: ${KUBERNETES_VERSION}}
 	controlPlaneEndpoint: ${CONTROL_PLANE_ENDPOINT}
 	networking:
 	  serviceSubnet: ${SERVICE_CIDR}
@@ -210,6 +238,24 @@ fs.inotify.max_user_instances = 2147483647
 fs.inotify.max_queued_events = 2147483647
 EOF
 echo_run sysctl -p "${K8S_SYSCTL}" || fail "Failed to enable extra file watches"
+
+# Guard: make sure the container runtime can actually pull images before we run
+# 'kubeadm init'. clear-node and service restarts can leave a brief window where
+# the runtime (for cri-dockerd: the Docker -> containerd backend) refuses
+# connections, which makes init's preflight image pulls fail. Retry the pull
+# until it succeeds (or we time out); this also warms the image cache for init.
+CRI_WAIT_TIMEOUT=180
+START="$(date +%s)"
+say "👉 Waiting for the container runtime to be ready and pre-pulling images..."
+while true ; do
+	if kubeadm config images pull --config "${KUBEADM_CONFIG_FILE}" &>/dev/null ; then
+		break
+	fi
+	NOW="$(date +%s)"
+	[ $(( NOW - START )) -ge ${CRI_WAIT_TIMEOUT} ] && fail "The container runtime [${CRI}] did not become ready within ${CRI_WAIT_TIMEOUT}s"
+	sleep 3 || fail "Wait for runtime readiness interrupted"
+done
+say "\t✅ Container runtime ready and required images present"
 
 # Next, init the cluster
 echo_run kubeadm init \
