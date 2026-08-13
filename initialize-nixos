@@ -162,14 +162,36 @@ export_ca()
 		warn "The arkcase-system/arkcase-root-ca secret does not exist yet -- run ./create-arkcase-ca first"
 	fi
 
-	echo ""
-	say "Add these to your NixOS configuration to trust them system-wide:"
-	echo ""
-	echo "	services.arkcase-k8s.caCertificates = ["
+	#
+	# The paths below are deliberately relative. Under flakes, evaluation is pure:
+	# the evaluator may only read the flake's source tree, and it reads it through
+	# the store copy rather than through the directory the flake lives in. An
+	# absolute path is therefore rejected ("access to absolute path ... is
+	# forbidden in pure evaluation mode") even when it points inside that same
+	# directory. Relative paths resolve against the store copy and work.
+	#
+	# That store copy is populated from git, so an untracked certificate is simply
+	# absent from it -- hence the 'git add' below, which is not optional.
+	#
+	local FILES=()
 	local F=""
 	for F in "${OUT_DIR}"/*.crt ; do
 		[ -e "${F}" ] || continue
-		echo "	  ${F}"
+		FILES+=("$(basename "${F}")")
+	done
+
+	echo ""
+	say "Copy these next to the configuration.nix that sets services.arkcase-k8s,"
+	say "and -- if that directory is a flake -- tell git about them:"
+	echo ""
+	echo "	cp ${OUT_DIR}/*.crt /path/to/your/nixos/config/"
+	echo "	git -C /path/to/your/nixos/config add ${FILES[*]}"
+	echo ""
+	say "Then reference them by RELATIVE path (absolute paths fail under flakes):"
+	echo ""
+	echo "	services.arkcase-k8s.caCertificates = ["
+	for F in "${FILES[@]}" ; do
+		echo "	  ./${F}"
 	done
 	echo "	];"
 	echo ""

@@ -4,7 +4,7 @@ set -euo pipefail
 
 timestamp()
 {
-	/usr/bin/date -Ins -u
+	/usr/bin/env date -Ins -u
 }
 
 say()
@@ -49,7 +49,7 @@ cleanup()
 	fi
 }
 
-if [ "$(/usr/bin/id -u)" != "0" ] ; then
+if [ "$(id -u)" != "0" ] ; then
 	say "⚠️ Not running as root, must escalate privileges!"
 	exec sudo -EH "PATH=${PATH}" "${0}" "${@}"
 fi

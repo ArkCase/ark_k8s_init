@@ -30,7 +30,7 @@ if ! systemctl list-unit-files "${RESOLVED}" --legend=false &>/dev/null ; then
 fi
 
 # Ok ... so we're going to do this configuration ... let's escalate first!
-if [ "$(/usr/bin/id -u)" != "0" ] ; then
+if [ "$(id -u)" != "0" ] ; then
 	say "⚠️ Not running as root, must escalate privileges!"
 	exec sudo -EH "PATH=${PATH}" "${0}" "${@}"
 fi

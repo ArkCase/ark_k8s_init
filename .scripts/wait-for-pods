@@ -8,7 +8,7 @@ MIN_BOOT_TIMEOUT=15
 
 timestamp()
 {
-	/usr/bin/date -Ins -u
+	/usr/bin/env date -Ins -u
 }
 
 say()

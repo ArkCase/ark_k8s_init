@@ -9,7 +9,7 @@ export CONF_DIR="${BASE_DIR}/conf"
 
 timestamp()
 {
-	/usr/bin/date -Ins -u
+	/usr/bin/env date -Ins -u
 }
 
 say()
@@ -43,7 +43,7 @@ list_kernels()
 	dpkg -l | egrep "linux-image-[56]" | awk '{ print $2 }' | sort -u
 }
 
-if [ "$(/usr/bin/id -u)" != "0" ] ; then
+if [ "$(id -u)" != "0" ] ; then
 
 	# Make sure these are visible "below"
 	[ -v CLUSTER_CIDR ] && export CLUSTER_CIDR

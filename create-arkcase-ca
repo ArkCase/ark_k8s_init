@@ -8,7 +8,7 @@ export SCRIPT_DIR="${BASE_DIR}/.scripts"
 
 timestamp()
 {
-	/usr/bin/date -Ins -u
+	/usr/bin/env date -Ins -u
 }
 
 say()

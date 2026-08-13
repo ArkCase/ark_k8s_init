@@ -105,6 +105,11 @@ in
         `./initialize-nixos --export-ca`, commit them next to your configuration, and
         list them here. The per-user NSS half of trust-cert still works imperatively
         and takes effect immediately, so browsers are trusted without a rebuild.
+
+        Use paths relative to the file that sets this option (`./arkcase-root-ca.crt`).
+        Under flakes, an absolute path fails pure evaluation even when it points into
+        the flake's own directory, and a certificate that is not tracked by git is
+        missing from the source tree Nix actually evaluates.
       '';
     };
   };

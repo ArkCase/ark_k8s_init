@@ -5,7 +5,7 @@ set -euo pipefail
 
 timestamp()
 {
-	/usr/bin/date -Ins -u
+	/usr/bin/env date -Ins -u
 }
 
 say()
@@ -64,20 +64,32 @@ else
 	CERT_NAME="$(openssl x509 -noout -in "${CERT_FILE}" -subject | sed -e 's;^[^=]\+\s*=\s*;;g')"
 fi
 
-if [ $(/usr/bin/id -u) == 0 ] ; then
-	CA_UPDATER=()
-	CA_UPDATER+=(update-ca-trust:/etc/pki/ca-trust/source/anchors)
-	CA_UPDATER+=(update-ca-certificates:/usr/local/share/ca-certificates/)
-	for UPDATER in "${CA_UPDATER[@]}" ; do
-		IFS=":" read EXE TARGET <<< "${UPDATER}"
-		if type -P "${EXE}" &>/dev/null ; then
-			echo_run cp -vf "${CERT_FILE}" "${TARGET}"
-			RC=0
-			echo_run "${EXE}" || RC=${?}
-			[ ${RC} -eq 0 ] || echo "WARNING: ${EXE} returned ${RC} ... certificate trusts may be incomplete!"
-			break
-		fi
-	done
+CA_UPDATER=()
+CA_UPDATER+=(update-ca-trust:/etc/pki/ca-trust/source/anchors)
+CA_UPDATER+=(update-ca-certificates:/usr/local/share/ca-certificates/)
+
+#
+# Find the system trust updater before deciding whether root is needed at all.
+# NixOS ships neither -- its system store is declarative (see the caCertificates
+# option in nixos/module.nix) -- so escalating there would ask for a password in
+# order to do nothing.
+#
+SYSTEM_UPDATER=""
+for UPDATER in "${CA_UPDATER[@]}" ; do
+	if type -P "${UPDATER%%:*}" &>/dev/null ; then
+		SYSTEM_UPDATER="${UPDATER}"
+		break
+	fi
+done
+
+if [ -z "${SYSTEM_UPDATER}" ] ; then
+	err "No system trust updater (${CA_UPDATER[*]%%:*}) was found - only the per-user (NSS) trust stores will be updated"
+elif [ $(id -u) == 0 ] ; then
+	IFS=":" read EXE TARGET <<< "${SYSTEM_UPDATER}"
+	echo_run cp -vf "${CERT_FILE}" "${TARGET}"
+	RC=0
+	echo_run "${EXE}" || RC=${?}
+	[ ${RC} -eq 0 ] || echo "WARNING: ${EXE} returned ${RC} ... certificate trusts may be incomplete!"
 else
 	echo_run sudo -EH "${0}" "${@}"
 	# Now we keep going to do the user-level trusts
@@ -85,7 +97,7 @@ fi
 
 FIRST="true"
 while read DB ; do
-	"${FIRST}" && say "🔒 Installing the certificate from [${CERT_FILE}] (${CERT_NAME}) for $(/usr/bin/id -un)..."
+	"${FIRST}" && say "🔒 Installing the certificate from [${CERT_FILE}] (${CERT_NAME}) for $(id -un)..."
 	FIRST="false"
 	DB="$(readlink -f "${DB}")"
 	DB_DIR="$(dirname "${DB}")"

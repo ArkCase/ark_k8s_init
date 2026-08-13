@@ -3,7 +3,7 @@ set -euo pipefail
 
 timestamp()
 {
-	/usr/bin/date -Ins -u
+	/usr/bin/env date -Ins -u
 }
 
 say()
@@ -30,9 +30,9 @@ fail()
 #
 # Make sure this runs as root
 #
-if [ "$(/usr/bin/id -u)" != "0" ] ; then
+if [ "$(id -u)" != "0" ] ; then
 	doing "Not running as root (or under sudo), must escalate privileges!"
-	exec /usr/bin/sudo -EH "${0}" "${@}"
+	exec sudo -EH "${0}" "${@}"
 else
 	ok "Privilege check complete!"
 fi

@@ -7,7 +7,7 @@ set -euo pipefail
 
 timestamp()
 {
-	/usr/bin/date -Ins -u
+	/usr/bin/env date -Ins -u
 }
 
 say()

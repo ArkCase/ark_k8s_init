@@ -33,7 +33,17 @@ echo_run helm upgrade --install \
 	jetstack/trust-manager \
 	--namespace "${APP_NS}" --wait
 
-echo_run kubectl --namespace "${APP_NS}" apply -f - <<EOF
+#
+# helm's --wait has been observed returning before the Deployment reports
+# Available, which leaves the Bundle below hitting a validating webhook whose
+# Service still has no ready endpoints -- kube-proxy REJECTs those, so it shows
+# up as "connection refused" rather than a timeout. Wait for the rollout for
+# real, and retry the apply anyway in case the webhook is still settling.
+#
+echo_run kubectl --context "local" --namespace "${APP_NS}" \
+	rollout status deployment/trust-manager --timeout=5m
+
+RESOURCES="$(cat <<EOF
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -214,3 +224,19 @@ spec:
       matchLabels:
         armedia-certificate-trusts/ca-trusts: "true"
 EOF
+)"
+
+ATTEMPTS=10
+for (( ATTEMPT = 1 ; ATTEMPT <= ATTEMPTS ; ATTEMPT++ )) ; do
+	RC=0
+	OUT="$(echo_run kubectl --context "local" --namespace "${APP_NS}" apply -f - <<< "${RESOURCES}" 2>&1)" || RC=${?}
+	echo "${OUT}"
+	[ ${RC} -eq 0 ] && break
+
+	# Only the webhook-not-ready flavor of failure is worth retrying
+	grep -q "failed calling webhook" <<< "${OUT}" || exit ${RC}
+	[ ${ATTEMPT} -lt ${ATTEMPTS} ] || exit ${RC}
+
+	echo "The trust-manager webhook is not serving yet, retrying (${ATTEMPT}/${ATTEMPTS})..."
+	sleep 5
+done
