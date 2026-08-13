@@ -1,0 +1,62 @@
+#!/bin/bash
+#
+# NixOS counterpart to clear-node.
+#
+# Deliberately narrower than the Ubuntu version: the CA trust store, the
+# kubelocal0 interface and the resolved configuration are all declarative here,
+# so this only tears down the mutable cluster state that kubeadm owns.
+#
+SCRIPT="$(readlink -f "${BASH_SOURCE:-${0}}")"
+BASEDIR="$(dirname "${SCRIPT}")"
+SCRIPT="$(basename "${SCRIPT}")"
+
+set -euo pipefail
+
+[ "$(id -u)" == "0" ] || exec sudo -EH "${0}" "${@}"
+
+echo_run()
+{
+	local ARGS=("${@}")
+	echo "${ARGS[@]@Q}"
+	"${@}"
+}
+
+CRI_SOCKETS=(/run/containerd/containerd.sock /var/run/containerd/containerd.sock /var/run/crio/crio.sock)
+CRI=()
+for SOCKET in "${CRI_SOCKETS[@]}" ; do
+	if [ -S "${SOCKET}" ] ; then
+		CRI=(--cri-socket "unix://${SOCKET}")
+		break
+	fi
+done
+
+echo_run kubeadm reset -f "${CRI[@]}"
+
+[ -d /etc/cni/net.d ] && rm -rf /etc/cni/net.d/*
+
+#
+# Calico drops its own binaries in here at runtime; clear them so a re-init starts
+# from the plugins the module seeds. arkcase-k8s-cni-plugins re-seeds on restart.
+#
+[ -d /opt/cni/bin ] && rm -rf /opt/cni/bin/*
+systemctl restart arkcase-k8s-cni-plugins.service || true
+
+# Drop the user's context, matching clear-node's behaviour
+if [ -n "${SUDO_USER:-}" ] ; then
+	SUDO_HOME="$(eval echo "~${SUDO_USER}")"
+	if [ -f "${SUDO_HOME}/.kube/config" ] ; then
+		for n in context cluster user ; do
+			sudo -u "${SUDO_USER}" kubectl config delete-$n local || true
+		done
+		rm -f "${SUDO_HOME}/.kube/local.crt" "${SUDO_HOME}/.kube/local.tok" || true
+	fi
+fi
+
+echo_run systemctl stop kubelet.service || true
+
+echo ""
+echo "Cluster state cleared."
+echo "NOTE: the CA trust store, ${0##*/}'s network interface and the resolved"
+echo "      configuration are declarative on NixOS and were left untouched."
+echo "      If you listed generated CAs in services.arkcase-k8s.caCertificates,"
+echo "      remove them and rebuild before re-initialising."

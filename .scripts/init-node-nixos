@@ -1,0 +1,235 @@
+#!/bin/bash
+#
+# NixOS counterpart to init-node.
+#
+# The declarative half of init-node -- the kubelocal0 interface, br_netfilter,
+# the sysctls and /etc/hosts -- lives in nixos/module.nix. This script only does
+# the part that cannot be declarative: running kubeadm.
+#
+SCRIPT="$(readlink -f "${BASH_SOURCE:-${0}}")"
+BASEDIR="$(dirname "${SCRIPT}")"
+SCRIPT="$(basename "${SCRIPT}")"
+
+set -euo pipefail
+
+timestamp()
+{
+	/usr/bin/env date -Ins -u
+}
+
+say()
+{
+	echo -e "$(timestamp): ${@}"
+}
+
+ok()
+{
+	say "✅ ${@}"
+}
+
+doing()
+{
+	say "👉 ${@}"
+}
+
+err()
+{
+	say "❌ ${@}"
+}
+
+fail()
+{
+	err "${@}" 1>&2
+	exit ${EXIT_CODE:-1}
+}
+
+cleanup()
+{
+	if [ -v KUBEADM_CONFIG_FILE ] ; then
+		[ -n "${KUBEADM_CONFIG_FILE}" ] && rm -f "${KUBEADM_CONFIG_FILE}" &>/dev/null || true
+	fi
+}
+
+echo_run()
+{
+	local ARGS=("${@}")
+	echo "${ARGS[@]@Q}"
+	"${@}"
+}
+
+usage()
+{
+	echo -e "usage: ${BASH_ARGV0:-${BASH_SOURCE:-${0}}} [ --print-config ]"
+	echo -e ""
+	echo -e "	--print-config	generate and validate the kubeadm configuration, print it,"
+	echo -e "			and exit without touching the node"
+	exit 1
+}
+
+trap cleanup EXIT
+
+PRINT_ONLY="false"
+if [ ${#} -gt 0 ] ; then
+	case "${1}" in
+		--print-config ) PRINT_ONLY="true" ; shift ;;
+		* ) usage ;;
+	esac
+fi
+[ ${#} -eq 0 ] || usage
+
+# --print-config is read-only, so it does not need root
+"${PRINT_ONLY}" || [ "$(id -u)" == "0" ] || exec sudo -EH "${0}" "${@}"
+
+#
+# cri-dockerd is not packaged in nixpkgs, so containerd is the expected CRI here.
+# The socket list is kept in preference order for parity with init-node.
+#
+CRI_SOCKETS=(/run/containerd/containerd.sock /var/run/containerd/containerd.sock /var/run/crio/crio.sock)
+CRI=""
+[ -v CRI_SOCKET ] || CRI_SOCKET=""
+if [ -n "${CRI_SOCKET}" ] ; then
+	# Explicit override, mainly for testing and for non-standard CRI installs
+	CRI="unix://${CRI_SOCKET#unix://}"
+else
+	for SOCKET in "${CRI_SOCKETS[@]}" ; do
+		if [ -S "${SOCKET}" ] ; then
+			CRI="unix://${SOCKET}"
+			break
+		fi
+	done
+fi
+[ -n "${CRI}" ] || fail "Failed to find a CRI socket among [${CRI_SOCKETS[*]}].\n\tIs 'services.arkcase-k8s.enable = true;' in your configuration, and have you rebuilt?"
+ok "Using the CRI socket at [${CRI}]"
+
+[ -v CLUSTER_CIDR ] || CLUSTER_CIDR="10.96.0.0/12"
+[ -v SERVICE_CIDR ] || SERVICE_CIDR="${CLUSTER_CIDR}"
+
+LOCAL_ONLY_ENDPOINT="k8s.cluster.prv"
+LOCAL_ONLY_IFACE="kubelocal0"
+
+LAN_FQDN="$(hostname -f)"
+LAN_HOSTNAME="$(hostname -s)"
+
+[ -v CONTROL_PLANE_ENDPOINT ] || CONTROL_PLANE_ENDPOINT=""
+[ -n "${CONTROL_PLANE_ENDPOINT}" ] || CONTROL_PLANE_ENDPOINT="${LOCAL_ONLY_ENDPOINT}"
+
+#
+# The interface is created declaratively by the module, so here we only verify it.
+#
+LOCAL_ONLY_ADDX=""
+if [ "${CONTROL_PLANE_ENDPOINT}" == "${LOCAL_ONLY_ENDPOINT}" ] ; then
+	read INET LOCAL_ONLY_ADDX REST < <(ip addr show "${LOCAL_ONLY_IFACE}" 2>/dev/null | grep -E '^[[:space:]]*inet[[:space:]]+') || true
+	[ -n "${LOCAL_ONLY_ADDX}" ] || \
+		fail "The interface [${LOCAL_ONLY_IFACE}] has no address.\n\tIt is created by nixos/module.nix -- try 'systemctl restart arkcase-k8s-interface.service'"
+	LOCAL_ONLY_ADDX="${LOCAL_ONLY_ADDX%%/*}"
+	ok "The interface [${LOCAL_ONLY_IFACE}] is up at [${LOCAL_ONLY_ADDX}]"
+
+	grep -qE "^${LOCAL_ONLY_ADDX}[[:space:]]+${LOCAL_ONLY_ENDPOINT}\b" /etc/hosts || \
+		fail "[${LOCAL_ONLY_ENDPOINT}] is not mapped to [${LOCAL_ONLY_ADDX}] in /etc/hosts.\n\tThis is set by networking.extraHosts in nixos/module.nix"
+	ok "[${LOCAL_ONLY_ENDPOINT}] resolves to [${LOCAL_ONLY_ADDX}]"
+fi
+
+#
+# kubeadm v1.36 emits v1beta4; v1beta3 still validates but is deprecated. The
+# Ubuntu path still writes v1beta3, so the two configs differ in shape here --
+# most visibly, v1beta4 extraArgs is a list of name/value pairs rather than a map.
+#
+KUBEADM_CONFIG=""
+read -r -d '' VAR <<-EOF || true
+	---
+	apiVersion: kubeadm.k8s.io/v1beta4
+	kind: InitConfiguration
+	nodeRegistration:
+	  criSocket: "${CRI}"
+EOF
+KUBEADM_CONFIG+="${VAR}"
+KUBEADM_CONFIG+=$'\n'
+
+if [ "${CONTROL_PLANE_ENDPOINT}" == "${LOCAL_ONLY_ENDPOINT}" ] ; then
+	read -r -d '' VAR <<-EOF || true
+		localAPIEndpoint:
+		  advertiseAddress: "${LOCAL_ONLY_ADDX}"
+	EOF
+	KUBEADM_CONFIG+="${VAR}"
+	KUBEADM_CONFIG+=$'\n'
+fi
+
+read -r -d '' VAR <<-EOF || true
+	---
+	apiVersion: kubeadm.k8s.io/v1beta4
+	kind: ClusterConfiguration
+	controlPlaneEndpoint: ${CONTROL_PLANE_ENDPOINT}
+	networking:
+	  serviceSubnet: ${SERVICE_CIDR}
+	  podSubnet: ${CLUSTER_CIDR}
+EOF
+KUBEADM_CONFIG+="${VAR}"
+KUBEADM_CONFIG+=$'\n'
+
+if [ "${CONTROL_PLANE_ENDPOINT}" == "${LOCAL_ONLY_ENDPOINT}" ] ; then
+	read -r -d '' VAR <<-EOF || true
+		apiServer:
+		  certSANs: &cert-sans [ "127.0.0.1", "localhost", "localhost.localdomain", "${LOCAL_ONLY_ENDPOINT}", "${LAN_HOSTNAME,,}", "${LAN_FQDN,,}" ]
+		etcd:
+		  local:
+		    serverCertSANs: *cert-sans
+		    peerCertSANs: *cert-sans
+		    extraArgs:
+		      - name: listen-client-urls
+		        value: https://${LOCAL_ONLY_ADDX}:2379
+		      - name: advertise-client-urls
+		        value: https://${LOCAL_ONLY_ADDX}:2379
+		      - name: listen-peer-urls
+		        value: https://${LOCAL_ONLY_ADDX}:2380
+		      - name: initial-advertise-peer-urls
+		        value: https://${LOCAL_ONLY_ADDX}:2380
+	EOF
+	KUBEADM_CONFIG+="${VAR}"
+	KUBEADM_CONFIG+=$'\n'
+fi
+
+#
+# The cgroup driver must agree with the containerd SystemdCgroup setting in
+# nixos/module.nix. kubeadm defaults to systemd, but state it explicitly so the
+# two halves of the configuration are visibly coupled.
+#
+read -r -d '' VAR <<-EOF || true
+	---
+	apiVersion: kubelet.config.k8s.io/v1beta1
+	kind: KubeletConfiguration
+	cgroupDriver: systemd
+EOF
+KUBEADM_CONFIG+="${VAR}"
+KUBEADM_CONFIG+=$'\n'
+
+KUBEADM_CONFIG_FILE="$(mktemp --suffix=.yaml)"
+echo "${KUBEADM_CONFIG}" > "${KUBEADM_CONFIG_FILE}"
+
+doing "Validating the generated kubeadm configuration..."
+kubeadm config validate --config "${KUBEADM_CONFIG_FILE}" || \
+	fail "The generated kubeadm configuration is invalid:\n$(<"${KUBEADM_CONFIG_FILE}")"
+ok "Configuration is valid"
+
+if "${PRINT_ONLY}" ; then
+	echo ""
+	cat "${KUBEADM_CONFIG_FILE}"
+	exit 0
+fi
+
+echo_run systemctl restart containerd.service || fail "Failed to start containerd"
+
+# kubelet crash-loops until kubeadm lands its config; that is expected.
+echo_run systemctl start kubelet.service || true
+
+echo_run kubeadm init \
+	--config "${KUBEADM_CONFIG_FILE}" \
+	--upload-certs || fail "Kubeadm failed using this configuration:\n$(<"${KUBEADM_CONFIG_FILE}")"
+
+# Set up the kubeconfig stuff (reused verbatim from the Ubuntu path)
+"${BASEDIR}/init-kubeconfig"
+
+# ONLY FOR SINGLE-NODE CLUSTERS
+echo_run kubectl --context "local" taint nodes --all node-role.kubernetes.io/control-plane- || true
+
+echo_run kubectl --context "local" get nodes
+echo_run kubectl --context "local" get pods --all-namespaces

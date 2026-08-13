@@ -1,0 +1,260 @@
+#!/bin/bash
+#
+# NixOS entry point, counterpart to ./initialize.
+#
+# On Ubuntu, ./initialize spends most of its time as root installing packages and
+# writing system configuration. On NixOS all of that is declarative and lives in
+# nixos/module.nix, so this script does two things instead:
+#
+#   1. verifies that the host layer is actually active, and
+#   2. runs the dynamic layer -- kubeadm, Calico, the Helm stack, the ArkCase CA --
+#      by reusing the OS-agnostic scripts in .scripts/ unchanged.
+#
+SCRIPT="$(readlink -f "${BASH_SOURCE:-${0}}")"
+
+set -euo pipefail
+
+export BASE_DIR="$(dirname "${SCRIPT}")"
+export SCRIPT_DIR="${BASE_DIR}/.scripts"
+export CONF_DIR="${BASE_DIR}/conf"
+export NIXOS_DIR="${BASE_DIR}/nixos"
+
+timestamp()
+{
+	/usr/bin/env date -Ins -u
+}
+
+say()
+{
+	echo -e "$(timestamp): ${@}"
+}
+
+ok()
+{
+	say "✅ ${@}"
+}
+
+doing()
+{
+	say "👉 ${@}"
+}
+
+warn()
+{
+	say "⚠️ ${@}"
+}
+
+err()
+{
+	say "❌ ${@}"
+}
+
+fail()
+{
+	err "${@}" 1>&2
+	exit ${EXIT_CODE:-1}
+}
+
+usage()
+{
+	echo -e "usage: ${BASH_ARGV0:-${BASH_SOURCE:-${0}}} [ --check | --export-ca ]"
+	echo -e ""
+	echo -e "	(no arguments)	initialize the cluster and the ArkCase support stack"
+	echo -e "	--check		run the host-layer preflight checks and exit"
+	echo -e "	--export-ca	write the cluster and ArkCase CAs into nixos/certs/ for"
+	echo -e "			use with services.arkcase-k8s.caCertificates"
+	exit 1
+}
+
+################################################################################
+#
+# Preflight: everything below is supplied by nixos/module.nix. Failing here means
+# the module is missing, disabled, or the machine has not been rebuilt.
+#
+################################################################################
+
+REBUILD_HINT="Add nixos/module.nix to your configuration, set 'services.arkcase-k8s.enable = true;' and rebuild."
+
+preflight()
+{
+	local PROBLEMS=0
+
+	problem()
+	{
+		err "${@}"
+		(( PROBLEMS++ )) || true
+	}
+
+	[ -e /etc/NIXOS ] || problem "This does not look like NixOS -- use ./initialize instead."
+
+	local P=""
+	for P in kubeadm kubelet kubectl helm ; do
+		type -P "${P}" &>/dev/null || problem "[${P}] is not on PATH. ${REBUILD_HINT}"
+	done
+
+	systemctl list-unit-files kubelet.service &>/dev/null || \
+		problem "There is no kubelet.service unit. ${REBUILD_HINT}"
+
+	local SOCKET=""
+	local FOUND=""
+	for SOCKET in /run/containerd/containerd.sock /var/run/containerd/containerd.sock /var/run/crio/crio.sock ; do
+		[ -S "${SOCKET}" ] && FOUND="${SOCKET}" && break
+	done
+	[ -n "${FOUND}" ] || problem "No CRI socket found. Is containerd running? ${REBUILD_HINT}"
+
+	#
+	# The failure this catches is genuinely hard to diagnose: NixOS defaults the
+	# containerd CNI bin_dir to a read-only /nix/store path, and Calico's install-cni
+	# copies binaries into it at runtime. Without the override in module.nix, Calico
+	# fails with a permission error long after this script has exited successfully.
+	#
+	local CNI_DIR="/opt/cni/bin"
+	if [ ! -d "${CNI_DIR}" ] ; then
+		problem "[${CNI_DIR}] does not exist. ${REBUILD_HINT}"
+	else
+		case "$(readlink -f "${CNI_DIR}" 2>/dev/null)" in
+			/nix/store/* ) problem "[${CNI_DIR}] resolves into /nix/store and is read-only.\n\tCalico cannot install its plugins there -- check services.arkcase-k8s.cniBinDir." ;;
+		esac
+	fi
+
+	if [ -n "$(swapon --show --noheadings --raw 2>/dev/null)" ] ; then
+		problem "Swap is enabled; Kubernetes requires it to be off.\n\tSet 'swapDevices = [];' (and disable zramSwap) and rebuild."
+	fi
+
+	local SYSCTL=""
+	for SYSCTL in net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables ; do
+		local V=""
+		V="$(sysctl -n "${SYSCTL}" 2>/dev/null)" || V=""
+		[ "${V}" == "1" ] || problem "sysctl ${SYSCTL} is [${V:-unset}], expected 1. ${REBUILD_HINT}"
+	done
+
+	if [ ${PROBLEMS} -gt 0 ] ; then
+		echo ""
+		fail "Preflight found ${PROBLEMS} problem(s); not continuing."
+	fi
+
+	ok "Preflight passed -- the NixOS host layer is active"
+}
+
+################################################################################
+#
+# --export-ca: bridge the imperative CA back into the declarative trust store.
+#
+################################################################################
+
+export_ca()
+{
+	local OUT_DIR="${NIXOS_DIR}/certs"
+	mkdir -p "${OUT_DIR}" || fail "Failed to create [${OUT_DIR}]"
+
+	doing "Exporting the Kubernetes cluster CA..."
+	sudo cat /etc/kubernetes/pki/ca.crt > "${OUT_DIR}/k8s-ca.crt" || \
+		fail "Failed to read the cluster CA -- has the cluster been initialized?"
+	ok "Wrote [${OUT_DIR}/k8s-ca.crt]"
+
+	doing "Exporting the ArkCase root CA..."
+	if kubectl --context "local" --namespace "arkcase-system" get secret "arkcase-root-ca" &>/dev/null ; then
+		kubectl --context "local" --namespace "arkcase-system" get secret "arkcase-root-ca" \
+			-o jsonpath='{.data.crt}' | base64 -d > "${OUT_DIR}/arkcase-root-ca.crt" || \
+			fail "Failed to export the ArkCase root CA"
+		ok "Wrote [${OUT_DIR}/arkcase-root-ca.crt]"
+	else
+		warn "The arkcase-system/arkcase-root-ca secret does not exist yet -- run ./create-arkcase-ca first"
+	fi
+
+	echo ""
+	say "Add these to your NixOS configuration to trust them system-wide:"
+	echo ""
+	echo "	services.arkcase-k8s.caCertificates = ["
+	local F=""
+	for F in "${OUT_DIR}"/*.crt ; do
+		[ -e "${F}" ] || continue
+		echo "	  ${F}"
+	done
+	echo "	];"
+	echo ""
+	say "Then rebuild. Per-user (browser/NSS) trust is already applied imperatively"
+	say "by .scripts/trust-cert and needs no rebuild."
+}
+
+################################################################################
+
+[ ${#} -le 1 ] || usage
+if [ ${#} -eq 1 ] ; then
+	case "${1}" in
+		--check ) preflight ; exit 0 ;;
+		--export-ca ) export_ca ; exit 0 ;;
+		-h | --help | "-?" ) usage ;;
+		* ) usage ;;
+	esac
+fi
+
+doing "Checking the NixOS host layer..."
+preflight
+
+#
+# Cluster layer. init-node-nixos self-escalates; everything after it is kubectl
+# and helm, which run as the invoking user against the 'local' context.
+#
+if kubectl --context "local" get pods -A &>/dev/null ; then
+	ok "A cluster is already reachable through the 'local' context"
+else
+	doing "Initializing the Kubernetes cluster node..."
+	[ -v CLUSTER_CIDR ] && echo "	👉 CLUSTER_CIDR=[${CLUSTER_CIDR}]"
+	[ -v SERVICE_CIDR ] && echo "	👉 SERVICE_CIDR=[${SERVICE_CIDR}]"
+	"${SCRIPT_DIR}/init-node-nixos" || fail "Failed to initialize the cluster node"
+	ok "The Kubernetes node is initialized"
+
+	#
+	# init-node-nixos configures root's kubeconfig; do the same for the caller.
+	#
+	doing "Configuring your kubeconfig..."
+	"${SCRIPT_DIR}/init-kubeconfig" || fail "Failed to configure the kubeconfig"
+
+	doing "Installing Calico..."
+	"${SCRIPT_DIR}/init-calico" || fail "Failed to install Calico"
+
+	doing "Deploying the K8s dashboard..."
+	kubectl --context "local" apply -f "${CONF_DIR}/k8s-dashboard.yaml" || fail "Failed to install the K8s dashboard"
+
+	doing "Deploying the K8s metrics..."
+	"${SCRIPT_DIR}/init-metrics" || fail "Failed to install the K8s metrics"
+fi
+
+#
+# Workload layer -- reused from the Ubuntu path without modification.
+#
+doing "Installing the ArkCase support stack..."
+"${SCRIPT_DIR}/init-user" || fail "Failed to deploy the support resources"
+
+doing "Configuring AWS..."
+"${SCRIPT_DIR}/init-aws-config" || warn "AWS configuration did not complete"
+
+doing "Configuring Act..."
+"${SCRIPT_DIR}/init-act-config" || warn "Act configuration did not complete"
+
+doing "Creating the ArkCase root CA..."
+"${BASE_DIR}/create-arkcase-ca" || fail "Failed to create the ArkCase CA"
+
+"${SCRIPT_DIR}/wait-for-pods" || true
+
+echo ""
+echo ""
+ok "Installation completed."
+echo ""
+
+if kubectl --context "local" get pods -A &>/dev/null ; then
+	ok "Kubernetes control is enabled"
+else
+	err "Your Kubernetes configuration seems to be incorrect, please fix it before continuing."
+fi
+echo ""
+
+#
+# The one genuinely manual step. Unlike Ubuntu, the generated CAs cannot be pushed
+# into the system trust store imperatively -- that requires a rebuild.
+#
+warn "The generated CAs are trusted per-user (NSS) but NOT system-wide yet."
+say "	Run '${BASH_ARGV0:-${0}} --export-ca' and follow the printed instructions"
+say "	to add them to services.arkcase-k8s.caCertificates, then rebuild."
+echo ""
