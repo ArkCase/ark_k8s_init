@@ -50,7 +50,7 @@ spec:
   # Default schedule every 5 minutes
   # Adjust as desired
   schedule: "0-59 * * * *"
-  successfulJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 0
   failedJobsHistoryLimit: 3
   suspend: false
   concurrencyPolicy: Forbid
