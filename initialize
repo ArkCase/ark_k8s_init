@@ -304,15 +304,31 @@ doing "Installing/Updating Act..."
 #
 # Install/Upgrade Kubernetes
 #
-[ -v K8S_VER ] || K8S_VER=""
-[ -n "${K8S_VER}" ] || K8S_VER="1.33"
 
-K8S_UPGRADE_VER=""
 if KUBEADM_VER="$(kubeadm version -o json)" ; then
 	KUBEADM_VER="$(jq -r '.clientVersion.major + "." + .clientVersion.minor' <<< "${KUBEADM_VER}")"
+else
+	KUBEADM_VER="0.0"
+fi
 
-	# Try to see if there's an upgrade plan available
-	#
+[ -v K8S_VER ] || K8S_VER=""
+[ -n "${K8S_VER}" ] || K8S_VER="1.35"
+
+# Compare by version number correctly
+LATEST_VER="$(echo -e "${KUBEADM_VER}\n${K8S_VER}\n" | sed -e '/^\s*$/d' | sort -V | tail -1)"
+if [ "${KUBEADM_VER}" != "${LATEST_VER}" ] ; then
+	[ -n "${KUBEADM_VER}" ] && say "Existing Kubernetes version ${KUBEADM_VER}, but want ${K8S_VER}"
+	doing "Installing/Upgrading Kubernetes v${K8S_VER}..."
+	rm -f "${TRUSTED_GPG_DIR}/kubernetes.gpg" &>/dev/null || true
+	curl -fsSL "https://pkgs.k8s.io/core:/stable:/v${K8S_VER}/deb/Release.key" | gpg --dearmor -o "${TRUSTED_GPG_DIR}/kubernetes.gpg"
+	echo "deb https://pkgs.k8s.io/core:/stable:/v${K8S_VER}/deb/ /" > "${APT_SOURCES_DIR}/kubernetes.list"
+	apt-get update
+	apt-get install -y kubelet kubeadm kubectl
+fi
+ok "Kubernetes v${K8S_VER} is installed"
+
+K8S_UPGRADE_VER=""
+if kubectl --context "local" get nodes &>/dev/null ; then
 	# Wait for this to take effect, though...
 	if kubectl --context "local" --namespace "calico-system" get pods &>/dev/null ; then
 		doing "Rebooting Calico (just in case)..."
@@ -323,28 +339,13 @@ if KUBEADM_VER="$(kubeadm version -o json)" ; then
 		kubectl --context "local" --namespace "calico-system" wait --timeout=90s --for condition=Ready pod --selector k8s-app=calico-node &>/dev/null || err "Calico node reboot timed out"
 	fi
 
-	if kubectl --context "local" get nodes &>/dev/null ; then
-		doing "Fetching any potential upgrade information..."
-		if K8S_UPGRADE_PLAN="$(kubeadm upgrade plan -o json 2>/dev/null)" ; then
-			K8S_UPGRADE_VER="$(jq -r '.availableUpgrades[].components[] | select(.name == "kube-apiserver") | select(.currentVersion != .newVersion) | .newVersion' <<< "${K8S_UPGRADE_PLAN}")"
-		else
-			err "Could not compute an upgrade plan ... maybe it's not needed?"
-		fi
+	doing "Fetching any potential upgrade information..."
+	if K8S_UPGRADE_PLAN="$(kubeadm upgrade plan -o json 2>/dev/null)" ; then
+		K8S_UPGRADE_VER="$(jq -r '.availableUpgrades[].components[] | select(.name == "kube-apiserver") | select(.currentVersion != .newVersion) | .newVersion' <<< "${K8S_UPGRADE_PLAN}")"
+	else
+		err "Could not compute an upgrade plan ... maybe it's not needed?"
 	fi
-else
-	KUBEADM_VER="0"
 fi
-
-if [ ${KUBEADM_VER//./0} -lt ${K8S_VER//./0} ] ; then
-	[ -n "${KUBEADM_VER}" ] && say "Existing Kubernetes version ${KUBEADM_VER}"
-	doing "Installing/Upgrading Kubernetes v${K8S_VER}..."
-	rm -f "${TRUSTED_GPG_DIR}/kubernetes.gpg" &>/dev/null || true
-	curl -fsSL "https://pkgs.k8s.io/core:/stable:/v${K8S_VER}/deb/Release.key" | gpg --dearmor -o "${TRUSTED_GPG_DIR}/kubernetes.gpg"
-	echo "deb https://pkgs.k8s.io/core:/stable:/v${K8S_VER}/deb/ /" > "${APT_SOURCES_DIR}/kubernetes.list"
-	apt-get update
-	apt-get install -y kubelet kubeadm kubectl
-fi
-ok "Kubernetes v${K8S_VER} is installed"
 
 #
 # Initialize the K8s node
