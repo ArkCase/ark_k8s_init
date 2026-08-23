@@ -70,11 +70,13 @@ ok "Container ready with ID ${CONTAINER}!"
 
 doing "Copying the common-use scripts ..."
 SRC_ITEMS=(
-	.functions
-	usr/local/bin/
+	/.functions
+	/usr/local/bin
 )
 for SRC in "${SRC_ITEMS[@]}" ; do
 	doing "Installing [${SRC}] ..."
-	OUT="$( docker cp "${CONTAINER}:/${SRC}" "/${SRC}" )" || fail "Failed to copy [${SRC}] (rc=${?}): ${OUT}"
+	TGT="$(dirname "${SRC}")"
+	OUT="$(mkdir -vp "${TGT}" 2>&1)" || fail "Failed to create the target directory [${TGT}] (rc=${?}): ${OUT}"
+	OUT="$( docker cp "${CONTAINER}:${SRC}" "${TGT}" )" || fail "Failed to copy [${SRC}] to [${TGT}] (rc=${?}): ${OUT}"
 	ok "Installed!"
 done
