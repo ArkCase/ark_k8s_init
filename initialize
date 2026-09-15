@@ -214,7 +214,9 @@ if ! docker ps -a &>/dev/null ; then
 			"exec-opts": ["native.cgroupdriver=systemd"],
 			"log-driver": "json-file",
 			"log-opts": {"max-size": "100m" },
-			"storage-driver": "overlay2"
+			"features": {
+				"containerd-snapshotter": true
+			}
 		}
 		EOF
 		apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
