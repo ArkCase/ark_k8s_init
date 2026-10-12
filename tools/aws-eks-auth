@@ -1,0 +1,52 @@
+#!/bin/bash
+
+set -euo pipefail
+. /.functions
+
+usage()
+{
+	[ ${#} -eq 0 ] || err "${@}"
+	echo -e "usage: ${BASH_ARGV0:-${BASH_SOURCE:-${0}}} [ --profile profile-name ] --cluster-name cluster [ aws-args ]"
+	exit 1
+}
+
+# Find the --profile flag, if given.
+PROFILE=()
+CLUSTER=()
+
+ARGS=()
+while [ ${#} -gt 0 ] ; do
+	case "${1}" in
+		--profile )
+			[ ${#PROFILE[@]} -gt 0 ] && fail "The ${1} flag may only be provided once"
+			[ ${#} -gt 1 ] || fail "The ${1} flag requires a profile name"
+			[ -n "${2}" ] || fail "The profile name may not be the empty string"
+			PROFILE=( "${1}" "${2}" )
+			shift 2
+			continue
+			;;
+
+		--cluster-name )
+			[ ${#CLUSTER[@]} -gt 0 ] && fail "The ${1} flag may only be provided once"
+			[ ${#} -gt 1 ] || fail "The ${1} flag requires a cluster name"
+			[ -n "${2}" ] || fail "The cluster name may not be the empty string"
+			CLUSTER=( "${1}" "${2}" )
+			shift 2
+			continue
+			;;
+	esac
+	ARGS+=( "${1}" )
+	shift
+done
+
+[ ${#CLUSTER[@]} -eq 2 ] || usage "The --cluster-name parameter is required"
+
+# Restore the flags
+set -- "${ARGS[@]}"
+
+# Ensure logged in
+aws sts get-caller-identity "${PROFILE[@]}" &>/dev/null \
+	|| OUT="$(aws sso login "${PROFILE[@]}" 2>&1)" \
+	|| fail "Failed to perform AWS SSO authentication (rc=${?}): ${OUT}"
+
+exec aws eks get-token "${PROFILE[@]}" "${CLUSTER[@]}" "${@}"
