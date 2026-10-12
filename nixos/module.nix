@@ -12,7 +12,12 @@
 #
 # ...rebuild, then run ./initialize-nixos from the repository.
 #
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   cfg = config.services.arkcase-k8s;
@@ -95,7 +100,7 @@ in
     caCertificates = lib.mkOption {
       type = lib.types.listOf lib.types.path;
       default = [ ];
-      example = lib.literalExpression ''[ ./arkcase-root-ca.crt ./k8s-ca.crt ]'';
+      example = lib.literalExpression "[ ./arkcase-root-ca.crt ./k8s-ca.crt ]";
       description = ''
         Certificates to add to the system trust store.
 
@@ -125,15 +130,15 @@ in
       kubernetes-helm
       cni-plugins
       cri-tools
-      nssTools        # certutil, for the per-user half of .scripts/trust-cert
+      nssTools # certutil, for the per-user half of .scripts/trust-cert
       gh
       act
       kubectl-view-secret
       # Utilities the reused .scripts/ expect to find on PATH
       jq
       yq-go
-      moreutils       # sponge
-      gettext         # envsubst
+      moreutils # sponge
+      gettext # envsubst
       openssl
       curl
       wget
@@ -170,7 +175,10 @@ in
     systemd.services.arkcase-k8s-cni-plugins = {
       description = "Seed the writable CNI plugin directory for Kubernetes";
       wantedBy = [ "multi-user.target" ];
-      before = [ "containerd.service" "kubelet.service" ];
+      before = [
+        "containerd.service"
+        "kubelet.service"
+      ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -191,7 +199,10 @@ in
     systemd.services.arkcase-k8s-interface = lib.mkIf (cfg.controlPlaneEndpoint == "k8s.cluster.prv") {
       description = "Local-only Kubernetes control plane interface";
       wantedBy = [ "multi-user.target" ];
-      before = [ "kubelet.service" "containerd.service" ];
+      before = [
+        "kubelet.service"
+        "containerd.service"
+      ];
       after = [ "network-pre.target" ];
       path = [ pkgs.iproute2 ];
       serviceConfig = {
@@ -208,8 +219,9 @@ in
       '';
     };
 
-    networking.extraHosts = lib.mkIf (cfg.controlPlaneEndpoint == "k8s.cluster.prv")
-      "${cfg.interfaceAddress} ${cfg.controlPlaneEndpoint}";
+    networking.extraHosts = lib.mkIf (
+      cfg.controlPlaneEndpoint == "k8s.cluster.prv"
+    ) "${cfg.interfaceAddress} ${cfg.controlPlaneEndpoint}";
 
     #
     # The kubelet unit. On Ubuntu this ships in the kubelet .deb along with the
@@ -225,19 +237,22 @@ in
       documentation = [ "https://kubernetes.io/docs/" ];
       wantedBy = [ "multi-user.target" ];
       wants = [ "network-online.target" ];
-      after = [ "network-online.target" "containerd.service" ];
+      after = [
+        "network-online.target"
+        "containerd.service"
+      ];
 
       # kubelet shells out to these; without them on PATH, volume mounting and
       # iptables programming fail in ways that are painful to diagnose.
       path = with pkgs; [
-        util-linux      # mount, umount, nsenter
+        util-linux # mount, umount, nsenter
         iproute2
         iptables
         ethtool
         socat
         conntrack-tools
         kmod
-        e2fsprogs       # mkfs.ext4 for PVCs
+        e2fsprogs # mkfs.ext4 for PVCs
         xfsprogs
         cfg.package
       ];
@@ -279,7 +294,11 @@ in
     # Kernel prerequisites -- the Ubuntu path does these with modprobe and
     # /etc/sysctl.d drop-ins inside init-node.
     #
-    boot.kernelModules = [ "br_netfilter" "overlay" "dummy" ];
+    boot.kernelModules = [
+      "br_netfilter"
+      "overlay"
+      "dummy"
+    ];
 
     boot.kernel.sysctl = {
       "net.bridge.bridge-nf-call-iptables" = 1;
@@ -302,20 +321,31 @@ in
       the kubelet will fail to start.
     '';
 
-    #
-    # DNS. The Ubuntu init-local-dns writes a resolved drop-in with a bare Domains=
-    # list, which routes *all* queries at kube-dns. Here the domains are prefixed
-    # with '~' so only cluster names are sent to the cluster resolver and ordinary
-    # DNS is left alone.
-    #
+    # Kubernetes DNS is routed through a dedicated link, not global DNS.
     services.resolved = {
       enable = lib.mkDefault true;
-      settings.Resolve = {
-        DNS = [ cfg.clusterDnsIp ];
-        # '~' marks these as routing-only domains, so cluster names go to kube-dns
-        # while ordinary DNS continues to use the normal per-link resolvers.
-        Domains = [ "~cluster.local" "~svc.cluster.local" ];
-        Cache = "no";
+      settings.Resolve.Cache = "no";
+    };
+
+    systemd.network = {
+      enable = true;
+
+      netdevs."50-arkcase-dns" = {
+        netdevConfig = {
+          Name = "arkcase-dns";
+          Kind = "dummy";
+        };
+      };
+
+      networks."50-arkcase-dns" = {
+        matchConfig.Name = "arkcase-dns";
+
+        networkConfig = {
+          DNS = [ cfg.clusterDnsIp ];
+          Domains = [ "~cluster.local" ];
+          DNSDefaultRoute = false;
+          LinkLocalAddressing = "no";
+        };
       };
     };
 
@@ -325,27 +355,35 @@ in
     #
     networking.firewall = lib.mkIf cfg.openFirewall {
       allowedTCPPorts = [
-        6443    # kube-apiserver
-        2379    # etcd client
-        2380    # etcd peer
-        10250   # kubelet API
-        10257   # kube-controller-manager
-        10259   # kube-scheduler
-        179     # Calico BGP
-        5473    # Calico Typha
-        8080    # HAProxy ingress (developer default, see conf/haproxy-ingress-values.yaml)
-        8443    # HAProxy ingress TLS
+        6443 # kube-apiserver
+        2379 # etcd client
+        2380 # etcd peer
+        10250 # kubelet API
+        10257 # kube-controller-manager
+        10259 # kube-scheduler
+        179 # Calico BGP
+        5473 # Calico Typha
+        8080 # HAProxy ingress (developer default, see conf/haproxy-ingress-values.yaml)
+        8443 # HAProxy ingress TLS
       ];
       allowedUDPPorts = [
-        4789    # Calico VXLAN
+        4789 # Calico VXLAN
       ];
       allowedTCPPortRanges = [
-        { from = 30000; to = 32767; }  # NodePort range
+        {
+          from = 30000;
+          to = 32767;
+        } # NodePort range
       ];
       # Pod traffic must not be filtered. Wildcard interface names are handled by
       # the iptables backend; if you have switched to networking.nftables, verify
       # these are translated as you expect.
-      trustedInterfaces = [ cfg.interface "cali+" "tunl0" "vxlan.calico" ];
+      trustedInterfaces = [
+        cfg.interface
+        "cali+"
+        "tunl0"
+        "vxlan.calico"
+      ];
     };
 
     security.pki.certificateFiles = cfg.caCertificates;
