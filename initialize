@@ -241,7 +241,7 @@ ok "Docker is installed and running"
 if ! systemctl is-active --quiet cri-docker.service  ; then
 	if ! is_installed cri-dockerd ; then
 		[ -v CRI_VER ] || CRI_VER=""
-		[ -n "${CRI_VER}" ] || CRI_VER="0.3.24"
+		[ -n "${CRI_VER}" ] || CRI_VER="0.4.0"
 		[ -v CRI_DISTRO ] || CRI_DISTRO=""
 		[ -n "${CRI_DISTRO}" ] || CRI_DISTRO="jammy"
 		doing "Installing CRI-Docker v${CRI_VER} (${CRI_DISTRO})..."
