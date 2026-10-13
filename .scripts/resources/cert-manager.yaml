@@ -2,7 +2,7 @@
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: armedia-root
+  name: cluster-local-root
 spec:
   selfSigned: {}
 ---
@@ -25,7 +25,7 @@ spec:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: armedia-root
+    name: cluster-local-root
     kind: ClusterIssuer
 ---
 apiVersion: cert-manager.io/v1
@@ -47,7 +47,7 @@ spec:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: armedia-root
+    name: cluster-local-root
     kind: ClusterIssuer
 ---
 apiVersion: cert-manager.io/v1
@@ -69,7 +69,7 @@ spec:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: armedia-root
+    name: cluster-local-root
     kind: ClusterIssuer
 ---
 apiVersion: cert-manager.io/v1
@@ -91,7 +91,7 @@ spec:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: armedia-root
+    name: cluster-local-root
     kind: ClusterIssuer
 ---
 apiVersion: cert-manager.io/v1
@@ -148,14 +148,6 @@ metadata:
 spec:
   ca:
     secretName: *name
----
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  annotations:
-  name: cluster-local-root
-spec:
-  selfSigned: {}
 ---
 apiVersion: trust.cert-manager.io/v1alpha1
 kind: Bundle
