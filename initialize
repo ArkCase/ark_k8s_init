@@ -183,17 +183,6 @@ else
 fi
 
 #
-# Disable swap
-#
-if [ -z "$(swapon --show --noheadings --raw)" ] ; then
-	ok "Swap is disabled as required by Kubernetes"
-else
-	doing "Disabling swap (required by Kubernetes)"
-	swapoff -a
-	grep -v "[[:space:]]swap[[:space:]]" /etc/fstab | sponge /etc/fstab
-fi
-
-#
 # Install and configure Docker
 #
 if ! docker ps -a &>/dev/null ; then

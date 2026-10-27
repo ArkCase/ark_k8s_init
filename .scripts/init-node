@@ -184,6 +184,17 @@ if [ "${CONTROL_PLANE_ENDPOINT}" == "${LOCAL_ONLY_ENDPOINT}" ] ; then
 	KUBEADM_CONFIG+=$'\n'
 fi
 
+read -r -d '' VAR <<-EOF || true
+	---
+	apiVersion: kubelet.config.k8s.io/v1beta1
+	kind: KubeletConfiguration
+	failSwapOn: false
+	memorySwap:
+	  swapBehavior: NoSwap
+EOF
+KUBEADM_CONFIG+="${VAR}"
+KUBEADM_CONFIG+=$'\n'
+
 KUBEADM_CONFIG_FILE="$(mktemp --suffix=.yaml)"
 echo "${KUBEADM_CONFIG}" > "${KUBEADM_CONFIG_FILE}"
 
