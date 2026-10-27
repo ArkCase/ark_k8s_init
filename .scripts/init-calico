@@ -12,7 +12,7 @@ echo_run()
 	"${@}"
 }
 
-CALICO_VERSION="v3.29.1"
+CALICO_VERSION="v3.32.2"
 
 LOCAL_IFACE="kubelocal0"
 
