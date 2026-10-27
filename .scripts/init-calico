@@ -40,6 +40,7 @@ fi
 if [[ "${NEW_CIDR}" =~ ^[0-9./]+$ ]] ; then
 	# First things first: add the operator
 	echo "Configuring Calico for CIDR [${NEW_CIDR}]..."
+	echo_run kubectl --context "local" create -f "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/v1_crd_projectcalico_org.yaml"
 	echo_run kubectl --context "local" create -f "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml"
 	CONFIG="$(sed -e "s;cidr: [0-9./]\+;cidr: ${NEW_CIDR};g" < \
 		<(curl "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/custom-resources.yaml") )"
