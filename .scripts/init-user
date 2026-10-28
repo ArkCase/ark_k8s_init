@@ -48,9 +48,9 @@ OUT="$("${BASEDIR}/init-cert-manager" 2>&1)" || \
 #
 # Add HAProxy
 #
-doing "Installing HAProxy Ingress"
-OUT="$("${BASEDIR}/init-hap" "${CONF_DIR}/haproxy-ingress-values.yaml" 2>&1)" || \
-	fail "Failed to install HAProxy Ingress (rc=${?}):\n${OUT}"
+doing "Installing the Ingress Controller"
+OUT="$("${BASEDIR}/init-ingress" 2>&1)" || \
+	fail "Failed to install the Ingress controller (rc=${?}):\n${OUT}"
 
 #
 # Create the AWS pull secret on the main namespace, as a template

@@ -1,0 +1,53 @@
+deployment:
+  kind: DaemonSet
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: true
+  runAsGroup: 65532
+  runAsNonRoot: true
+  runAsUser: 65532
+
+updateStrategy:
+  type: OnDelete
+
+ports:
+  web:
+    port: 8000        # container listens here (unprivileged)
+    hostPort: 80      # node:80 -> pod:8000
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    port: 8443
+    hostPort: 443
+
+service:
+  enabled: false
+
+api:
+  dashboard: true
+ingressRoute:
+  dashboard:
+    enabled: true
+
+log:
+  level: INFO
+accessLog:
+  enabled: true
+
+# Mount the CA bundle ConfigMap (must be in the same namespace as Traefik)
+volumes:
+  - name: ca-trusts
+    type: configMap
+    mountPath: /etc/traefik/ca
+
+# Trust it for all backend (upstream) TLS connections
+additionalArguments:
+  - "--serversTransport.rootCAs=/etc/traefik/ca/ca-trusts.pem"
+  - "--serversTransport.insecureSkipVerify=true"
