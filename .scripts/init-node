@@ -137,10 +137,11 @@ echo_run systemctl start kubelet || fail "Failed to start kubelet"
 KUBEADM_CONFIG=""
 read -r -d '' VAR <<-EOF || true
 	---
-	apiVersion: kubeadm.k8s.io/v1beta3
+	apiVersion: kubeadm.k8s.io/v1beta4
 	kind: InitConfiguration
 	nodeRegistration:
 	  criSocket: "${CRI}"
+	  taints: []
 EOF
 KUBEADM_CONFIG+="${VAR}"
 KUBEADM_CONFIG+=$'\n'
@@ -156,9 +157,14 @@ fi
 
 read -r -d '' VAR <<-EOF || true
 	---
-	apiVersion: kubeadm.k8s.io/v1beta3
+	apiVersion: kubeadm.k8s.io/v1beta4
 	kind: ClusterConfiguration
+	certificateValidityPeriod: 87600h
 	controlPlaneEndpoint: ${CONTROL_PLANE_ENDPOINT}
+	controllerManager:
+	  extraArgs:
+	    - name: cluster-signing-duration
+	      value: "87600h"   # 10 years
 	networking:
 	  serviceSubnet: ${SERVICE_CIDR}
 	  podSubnet: ${CLUSTER_CIDR}
@@ -189,6 +195,7 @@ read -r -d '' VAR <<-EOF || true
 	apiVersion: kubelet.config.k8s.io/v1beta1
 	kind: KubeletConfiguration
 	failSwapOn: false
+    serverTLSBootstrap: true
 	memorySwap:
 	  swapBehavior: NoSwap
 EOF
@@ -226,6 +233,33 @@ echo_run sysctl -p "${K8S_SYSCTL}" || fail "Failed to enable extra file watches"
 echo_run kubeadm init \
 	--config "${KUBEADM_CONFIG_FILE}" \
 	--upload-certs || fail "Kubeadm failed using this configuration:\n$(<"${KUBEADM_CONFIG_FILE}")"
+
+approve_node_serving_csr()
+{
+	local NODE_NAME="${LAN_HOSTNAME}"
+	local TIMEOUT="120"
+	local DEADLINE="$(( $(date +%s) + TIMEOUT ))"
+	local TEMPLATE='{{range .items}}{{if and (not .status.conditions) (eq .spec.username "system:node:'"${NODE_NAME}"'")}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
+	local PENDING=""
+	local CSR=""
+
+	while [ "$(date +%s)" -lt "${DEADLINE}" ] ; do
+		PENDING="$(kubectl --context "local" get csr \
+			--field-selector=spec.signerName=kubernetes.io/kubelet-serving \
+			-o go-template="${TEMPLATE}")"
+		if [ -n "${PENDING}" ] ; then
+			for CSR in ${PENDING} ; do
+				kubectl --context "local" certificate approve "${CSR}"
+			done
+			return 0
+		fi
+		sleep 2
+	done
+
+	echo "No pending kubelet-serving CSR from ${NODE_NAME} within ${TIMEOUT}s" >&2
+	return 1
+}
+approve_node_serving_csr || true
 
 # Set up the kubeconfig stuff
 "${BASEDIR}/init-kubeconfig"
