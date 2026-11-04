@@ -195,7 +195,7 @@ read -r -d '' VAR <<-EOF || true
 	apiVersion: kubelet.config.k8s.io/v1beta1
 	kind: KubeletConfiguration
 	failSwapOn: false
-    serverTLSBootstrap: true
+	serverTLSBootstrap: true
 	memorySwap:
 	  swapBehavior: NoSwap
 EOF
