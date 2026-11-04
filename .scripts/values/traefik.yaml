@@ -23,9 +23,19 @@ ports:
           to: websecure
           scheme: https
           permanent: true
+    transport:
+      respondingTimeouts:
+        readTimeout: 0s
+        writeTimeout: 0s
+        idleTimeout: 0s
   websecure:
     port: 8443
     hostPort: 443
+    transport:
+      respondingTimeouts:
+        readTimeout: 0s
+        writeTimeout: 0s
+        idleTimeout: 0s
 
 service:
   enabled: false
