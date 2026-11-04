@@ -136,68 +136,72 @@ echo_run systemctl start kubelet || fail "Failed to start kubelet"
 
 KUBEADM_CONFIG=""
 read -r -d '' VAR <<-EOF || true
-	---
-	apiVersion: kubeadm.k8s.io/v1beta4
-	kind: InitConfiguration
-	nodeRegistration:
-	  criSocket: "${CRI}"
-	  taints: []
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+nodeRegistration:
+  criSocket: "${CRI}"
+  taints: []
 EOF
 KUBEADM_CONFIG+="${VAR}"
 KUBEADM_CONFIG+=$'\n'
 
 if [ "${CONTROL_PLANE_ENDPOINT}" == "${LOCAL_ONLY_ENDPOINT}" ] ; then
 	read -r -d '' VAR <<-EOF || true
-		localAPIEndpoint:
-		  advertiseAddress: "${LOCAL_ONLY_ADDX}"
+	localAPIEndpoint:
+	  advertiseAddress: "${LOCAL_ONLY_ADDX}"
 	EOF
 	KUBEADM_CONFIG+="${VAR}"
 	KUBEADM_CONFIG+=$'\n'
 fi
 
 read -r -d '' VAR <<-EOF || true
-	---
-	apiVersion: kubeadm.k8s.io/v1beta4
-	kind: ClusterConfiguration
-	certificateValidityPeriod: 87600h
-	controlPlaneEndpoint: ${CONTROL_PLANE_ENDPOINT}
-	controllerManager:
-	  extraArgs:
-	    - name: cluster-signing-duration
-	      value: "87600h"   # 10 years
-	networking:
-	  serviceSubnet: ${SERVICE_CIDR}
-	  podSubnet: ${CLUSTER_CIDR}
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+certificateValidityPeriod: 87600h
+controlPlaneEndpoint: ${CONTROL_PLANE_ENDPOINT}
+controllerManager:
+  extraArgs:
+    - name: cluster-signing-duration
+      value: "87600h"   # 10 years
+networking:
+  serviceSubnet: ${SERVICE_CIDR}
+  podSubnet: ${CLUSTER_CIDR}
 EOF
 KUBEADM_CONFIG+="${VAR}"
 KUBEADM_CONFIG+=$'\n'
 
 if [ "${CONTROL_PLANE_ENDPOINT}" == "${LOCAL_ONLY_ENDPOINT}" ] ; then
 	read -r -d '' VAR <<-EOF || true
-		apiServer:
-		  certSANs: &cert-sans [ "127.0.0.1", "localhost", "localhost.localdomain", "${LOCAL_ONLY_ENDPOINT}", "${LAN_HOSTNAME,,}", "${LAN_FQDN,,}" ]
-		etcd:
-		  local:
-		    serverCertSANs: *cert-sans
-		    peerCertSANs: *cert-sans
-		    extraArgs:
-		      listen-client-urls: https://${LOCAL_ONLY_ADDX}:2379
-		      advertise-client-urls: https://${LOCAL_ONLY_ADDX}:2379
-		      listen-peer-urls: https://${LOCAL_ONLY_ADDX}:2380
-		      initial-advertise-peer-urls: https://${LOCAL_ONLY_ADDX}:2380
+	apiServer:
+	  certSANs: &cert-sans [ "127.0.0.1", "localhost", "localhost.localdomain", "${LOCAL_ONLY_ENDPOINT}", "${LAN_HOSTNAME,,}", "${LAN_FQDN,,}" ]
+	etcd:
+	  local:
+	    serverCertSANs: *cert-sans
+	    peerCertSANs: *cert-sans
+	    extraArgs:
+	      - name: listen-client-urls
+	        value: ${LOCAL_ONLY_ADDX}:2379
+	      - name: advertise-client-urls
+	        value: ${LOCAL_ONLY_ADDX}:2379
+	      - name: listen-peer-urls
+	        value: ${LOCAL_ONLY_ADDX}:2380
+	      - name: initial-advertise-peer-urls
+	        value: ${LOCAL_ONLY_ADDX}:2380
 	EOF
 	KUBEADM_CONFIG+="${VAR}"
 	KUBEADM_CONFIG+=$'\n'
 fi
 
 read -r -d '' VAR <<-EOF || true
-	---
-	apiVersion: kubelet.config.k8s.io/v1beta1
-	kind: KubeletConfiguration
-	failSwapOn: false
-	serverTLSBootstrap: true
-	memorySwap:
-	  swapBehavior: NoSwap
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+failSwapOn: false
+serverTLSBootstrap: true
+memorySwap:
+  swapBehavior: NoSwap
 EOF
 KUBEADM_CONFIG+="${VAR}"
 KUBEADM_CONFIG+=$'\n'
