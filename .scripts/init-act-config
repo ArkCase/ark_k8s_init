@@ -56,7 +56,7 @@ CONF="${BASEDIR}/act-config.bin"
 
 say "🔑 Decrypting the Act configuration..."
 CONF_TAR="$(mktemp)"
-openssl aes-256-cbc -a -A -d -salt -iter 1000 -in "${CONF}" -out "${CONF_TAR}" || fail "Failed to decrypt the Act configuration"
+openssl aes-256-cbc -a -A -d -salt -iter 1000 -in "${CONF}" -out "${CONF_TAR}" || { err "Failed to decrypt the Act configuration" ; exit 0 ; }
 tar -C "${CONFIG_DIR}" -xzvf "${CONF_TAR}" || fail "Failed to extract the Act configuration"
 ACTRC="${CONFIG_DIR}/actrc"
 if [ -f "${ACTRC}" ] ; then
