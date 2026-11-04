@@ -32,15 +32,17 @@ echo_run helm --kube-context "local" --namespace ingress-controller delete "hapr
 echo_run kubectl --context "local" delete namespace "haproxy-ingress" || true
 
 # Add the new hawtnezz ...
-echo_run kubectl --context "local" create -f - <<EOF
-apiVersion: v1
-kind: Namespace
-metadata:
-  labels:
-    # Make sure this annotation matches the annotation used for trust-manager
-    armedia-certificate-trusts/ca-trusts: "true"
-  name: traefik
-EOF
+if ! kubectl --context "local" get namespace traefik &>/dev/null ; then
+	echo_run kubectl --context "local" create -f - <<-EOF
+	apiVersion: v1
+	kind: Namespace
+	metadata:
+	  labels:
+	    # Make sure this annotation matches the annotation used for trust-manager
+	    armedia-certificate-trusts/ca-trusts: "true"
+	  name: traefik
+	EOF
+fi
 echo_run helm \
 	--kube-context "local" \
 	--namespace "${INGRESS_APP_NS}" \

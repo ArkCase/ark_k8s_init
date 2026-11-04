@@ -77,9 +77,9 @@ doing "Installing Vault"
 OUT="$("${BASEDIR}/init-vault" 2>&1)" || \
 	fail "Failed to install Vault (rc=${?}):\n${OUT}"
 
-doing "Installing Vault Secrets Operator"
-OUT="$("${BASEDIR}/init-vault-secrets-operator" 2>&1)" || \
-	fail "Failed to install Vault Secrets Operator (rc=${?}):\n${OUT}"
+doing "Installing External Secrets Operator"
+OUT="$("${BASEDIR}/init-external-secrets" 2>&1)" || \
+	fail "Failed to install External Secrets Operator (rc=${?}):\n${OUT}"
 
 doing "Installing Keda"
 OUT="$("${BASEDIR}/init-keda" 2>&1)" || \
