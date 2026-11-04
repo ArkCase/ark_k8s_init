@@ -182,13 +182,13 @@ if [ "${CONTROL_PLANE_ENDPOINT}" == "${LOCAL_ONLY_ENDPOINT}" ] ; then
 	    peerCertSANs: *cert-sans
 	    extraArgs:
 	      - name: listen-client-urls
-	        value: ${LOCAL_ONLY_ADDX}:2379
+	        value: https://${LOCAL_ONLY_ADDX}:2379
 	      - name: advertise-client-urls
-	        value: ${LOCAL_ONLY_ADDX}:2379
+	        value: https://${LOCAL_ONLY_ADDX}:2379
 	      - name: listen-peer-urls
-	        value: ${LOCAL_ONLY_ADDX}:2380
+	        value: https://${LOCAL_ONLY_ADDX}:2380
 	      - name: initial-advertise-peer-urls
-	        value: ${LOCAL_ONLY_ADDX}:2380
+	        value: https://${LOCAL_ONLY_ADDX}:2380
 	EOF
 	KUBEADM_CONFIG+="${VAR}"
 	KUBEADM_CONFIG+=$'\n'
