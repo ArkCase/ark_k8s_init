@@ -241,7 +241,7 @@ echo_run kubeadm init \
 approve_node_serving_csr()
 {
 	local NODE_NAME="${LAN_HOSTNAME}"
-	local TIMEOUT="120"
+	local TIMEOUT="900"
 	local DEADLINE="$(( $(date +%s) + TIMEOUT ))"
 	local TEMPLATE='{{range .items}}{{if and (not .status.conditions) (eq .spec.username "system:node:'"${NODE_NAME}"'")}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
 	local PENDING=""
