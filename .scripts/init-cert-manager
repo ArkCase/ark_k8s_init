@@ -25,7 +25,7 @@ echo_run helm upgrade --install \
 	"cert-manager" \
 	jetstack/cert-manager \
 	--create-namespace --namespace "${APP_NS}" \
-	--set crds.enabled=true --wait
+	-f "${BASEDIR}/values/cert-manager.yaml" --wait
 
 echo_run helm upgrade --install \
 	--kube-context "local" \
