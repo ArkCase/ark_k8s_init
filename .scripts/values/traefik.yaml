@@ -57,7 +57,14 @@ volumes:
     type: configMap
     mountPath: /etc/traefik/ca
 
+providers:
+  kubernetesIngress:
+    enabled: true
+    publishedService:
+      enabled: false
+
 # Trust it for all backend (upstream) TLS connections
 additionalArguments:
   - "--serversTransport.rootCAs=/etc/traefik/ca/ca-trusts.pem"
   - "--serversTransport.insecureSkipVerify=true"
+  - "--providers.kubernetesingress.ingressendpoint.hostname=cluster.local"
