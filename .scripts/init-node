@@ -198,10 +198,18 @@ read -r -d '' VAR <<-EOF || true
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
+evictionHard:
+  memory.available: "100Mi"
+  nodefs.available: "5%"
+  nodefs.inodesFree: "2%"
+  imagefs.available: "5%"
+  imagefs.inodesFree: "2%"
 failSwapOn: false
-serverTLSBootstrap: true
+imageGCHighThresholdPercent: 95
+imageGCLowThresholdPercent: 90
 memorySwap:
   swapBehavior: NoSwap
+serverTLSBootstrap: true
 EOF
 KUBEADM_CONFIG+="${VAR}"
 KUBEADM_CONFIG+=$'\n'
