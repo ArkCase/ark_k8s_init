@@ -200,11 +200,23 @@ if ! docker ps -a &>/dev/null ; then
 		cat <<-EOF > /etc/docker/daemon.json
 		{
 			"ipv6": false,
-			"exec-opts": ["native.cgroupdriver=systemd"],
+			"exec-opts": [
+				"native.cgroupdriver=systemd"
+			],
+			"cgroup-parent": "docker.slice",
 			"log-driver": "json-file",
-			"log-opts": {"max-size": "100m" },
+			"log-opts": {
+				"max-size": "100m"
+			},
 			"features": {
 				"containerd-snapshotter": true
+			},
+			"default-ulimits": {
+				"memlock": {
+					"Name": "memlock",
+					"Hard": -1,
+					"Soft": -1
+				}
 			}
 		}
 		EOF
