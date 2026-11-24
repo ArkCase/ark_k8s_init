@@ -12,8 +12,6 @@ echo_run()
 	"${@}"
 }
 
-[ ${#} -ge 1 ] && HAP_VALUES="${1}"
-
 REPO_NAME="kedacore"
 REPO_URL="https://kedacore.github.io/charts"
 [ -v APP_NS ] || APP_NS="keda"

@@ -58,7 +58,8 @@ usage()
 
 REG="public.ecr.aws"
 REPO="arkcase/act"
-VER="latest"
+# Pin for now...
+VER="0.2.89_arm"
 IMAGE="${REG}/${REPO}:${VER}"
 SRC_ACT="act"
 TGT_ACT="${SRC_ACT}"

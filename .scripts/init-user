@@ -48,9 +48,9 @@ OUT="$("${BASEDIR}/init-cert-manager" 2>&1)" || \
 #
 # Add HAProxy
 #
-doing "Installing HAProxy Ingress"
-OUT="$("${BASEDIR}/init-hap" "${CONF_DIR}/haproxy-ingress-values.yaml" 2>&1)" || \
-	fail "Failed to install HAProxy Ingress (rc=${?}):\n${OUT}"
+doing "Installing the Ingress Controller"
+OUT="$("${BASEDIR}/init-ingress" 2>&1)" || \
+	fail "Failed to install the Ingress controller (rc=${?}):\n${OUT}"
 
 #
 # Create the AWS pull secret on the main namespace, as a template
@@ -77,9 +77,9 @@ doing "Installing Vault"
 OUT="$("${BASEDIR}/init-vault" 2>&1)" || \
 	fail "Failed to install Vault (rc=${?}):\n${OUT}"
 
-doing "Installing Vault Secrets Operator"
-OUT="$("${BASEDIR}/init-vault-secrets-operator" 2>&1)" || \
-	fail "Failed to install Vault Secrets Operator (rc=${?}):\n${OUT}"
+doing "Installing External Secrets Operator"
+OUT="$("${BASEDIR}/init-external-secrets" 2>&1)" || \
+	fail "Failed to install External Secrets Operator (rc=${?}):\n${OUT}"
 
 doing "Installing Keda"
 OUT="$("${BASEDIR}/init-keda" 2>&1)" || \
