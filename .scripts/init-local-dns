@@ -37,7 +37,7 @@ fi
 
 # Keep track if the resolver daemon was running or not
 RESOLVED_RUNNING="false"
-systemctl status "${RESOLVED}" &>/dev/null && RESOLVED_RUNNING="true"
+systemctl is-active "${RESOLVED}" &>/dev/null && RESOLVED_RUNNING="true"
 
 # Get the IP for the DNS service...
 DNS_IP="$(kubectl --context "local" get service -n kube-system kube-dns -o json | jq -r ".spec.clusterIP")" || fail "Failed to get the IP address for the kube-dns service"
@@ -62,16 +62,6 @@ while [ ${#} -ge 2 ] ; do
 	shift
 done
 
-# Render the final configuration file
-TARGET_FILE="${TARGET_DIR}/k8s-${CLUSTER_DOMAIN}.conf"
-say "✅ Creating the new configuration at [${TARGET_FILE}] as:"
-cat <<EOF | tee "${TARGET_FILE}"
-[Resolve]
-Cache=no
-DNS=${DNS_IP}
-Domains=${DOMAINS[@]}
-EOF
-
 # Add another one which enables listening on the private address
 LOCAL_ONLY_NAME="K8s-Local"
 if LOCAL_ONLY_IFACE="$(nmcli -g connection.interface-name connection show "${LOCAL_ONLY_NAME}")" ; then
@@ -80,8 +70,16 @@ if LOCAL_ONLY_IFACE="$(nmcli -g connection.interface-name connection show "${LOC
 	say "✅ Creating the new configuration at [${TARGET_FILE}] as:"
 	cat <<-EOF | tee "${TARGET_FILE}"
 	[Resolve]
+	Cache=no-negative
 	DNSStubListenerExtra=${LOCAL_ONLY_ADDX}
 	EOF
+
+	# Make the cluster's DNS the DNS for the local-only interface
+	nmcli con modify "${LOCAL_ONLY_NAME}" \
+		ipv4.dns "${DNS_IP}" \
+		ipv4.dns-search "svc.cluster.local,cluster.local" \
+		ipv4.never-default yes
+	nmcli device reapply "${LOCAL_ONLY_IFACE}"
 
 	# Modify the Corefile to set the forwarder
 	say "✅ Configuring the cluster DNS to forward to resolved on [${LOCAL_ONLY_ADDX}]"
@@ -91,11 +89,43 @@ if LOCAL_ONLY_IFACE="$(nmcli -g connection.interface-name connection show "${LOC
 	COREFILE="$(jq -r ".data.Corefile" <<< "${CONFIGMAP}" | sed -e "s;/etc/resolv.conf;${LOCAL_ONLY_ADDX};g")"
 	CONFIGMAP="$(jq -r --arg corefile "${COREFILE}" '.data.Corefile = $corefile' <<< "${CONFIGMAP}")"
 
-	# Save the changes
+	LOCAL_DOMAIN="$(hostname --domain)"
+	[[ "${LOCAL_DOMAIN}" == "*.*" ]] || LOCAL_DOMAIN=""
+
+	RESOLV_CONF="/etc/kubernetes/resolv.conf"
+	cat <<-EOF > "${RESOLV_CONF}"
+	nameserver 10.255.255.254
+	${LOCAL_DOMAIN:+search ${LOCAL_DOMAIN}}
+	EOF
+
+	# Edit the kubelet configmap to use ${RESOLV_CONF} as the configuration
+	KUBELET_YAML="/var/lib/kubelet/config.yaml"
+	KEY="resolvConf"
+	CONFIG="$(grep -v "^${KEY}:" < "${KUBELET_YAML}" ; echo -e "\n${KEY}: ${RESOLV_CONF}\n")"
+	echo -n "${CONFIG}" | sed -e '/^\s\+$/d' > "${KUBELET_YAML}"
+
+	# Now patch the configmap in the same way
+	CONFIG="$( ( kubectl -n kube-system get configmap kubelet-config -o jsonpath='{.data.kubelet}' | grep -v "^${KEY}:" ; echo -e "\n${KEY}: ${RESOLV_CONF}\n" ) | sed -e '/^\s\+$/d')"
+	PATCH="$(jq -n -r --arg K "${CONFIG}" '{ "data": { "kubelet": $K } }')"
+	kubectl --context "local" -n kube-system patch configmap kubelet-config --type merge -p "${PATCH}"
+
+	systemctl is-active kubelet.service &>/dev/null && systemctl restart kubelet.service
+
+	# Save the changes to CoreDNS
 	kubectl --context "local" -n kube-system apply -f - <<< "${CONFIGMAP}"
 
 	# Bounce the CoreDNS Pods!
 	kubectl --context "local" -n kube-system rollout restart deployment coredns
+else
+	# Render the final configuration file
+	TARGET_FILE="${TARGET_DIR}/k8s-${CLUSTER_DOMAIN}.conf"
+	say "✅ Creating the new configuration at [${TARGET_FILE}] as:"
+	cat <<-EOF | tee "${TARGET_FILE}"
+	[Resolve]
+	Cache=no-negative
+	DNS=${DNS_IP}
+	Domains=${DOMAINS[@]}
+	EOF
 fi
 
 # Restart the DNS resolver, if necessary
